@@ -32,7 +32,7 @@ structures like numbers which can - apart from being hexadecimal or binary - als
 
 ----
 
-### 2. Parser (parser.py)
+### 2. Parsing (parser.py)
 
 Here the compiler uses this sequence of tokens to generate an AST-representation (abstract syntax
 tree) of the programm. It parses certain operations in a tree-wise manner. An example of this is
