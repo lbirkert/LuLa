@@ -1,4 +1,41 @@
 from dataclasses import dataclass
+from enum import Enum
+
+@dataclass
+class NumberLiteral:
+    type: str | None
+
+@dataclass
+class IntLiteral(NumberLiteral):
+    value: int
+
+@dataclass
+class FloatLiteral(NumberLiteral):
+    value: float
+
+@dataclass
+class Ident:
+    segs: list[str]
+
+    def of(segs: str) -> Ident:
+        return Ident(segs=segs.split("."))
+
+    def to_str(self) -> str:
+        return ".".join(self.segs)
+    
+    def sub(self, seg: str) -> Ident:
+        return Ident(segs=self.segs+[seg])
+    
+    def subs(self, seg: str) -> str:
+        return self.to_str() + "." + seg
+
+class OpKind(Enum):
+    ADD = "add"
+    SUB = "sub"
+    MUL = "mul"
+
+    def __init__(self, op_name: str):
+        self.op_name = op_name
 
 @dataclass
 class SourceSpan:

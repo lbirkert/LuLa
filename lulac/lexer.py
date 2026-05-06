@@ -1,6 +1,6 @@
+from .core import SourceSpan, NumberLiteral, IntLiteral, FloatLiteral
 from dataclasses import dataclass
 from enum import Enum, auto
-from core import SourceSpan
 
 # This file contains the lexer for my language
 # compiler that transforms the source code (str)
@@ -17,6 +17,8 @@ class TokenType(Enum):
     KEYWORD_FUN = auto()
     KEYWORD_OBJ = auto()
     KEYWORD_RET = auto()
+    KEYWORD_EXTERN = auto()
+    KEYWORD_ASM = auto()
     # values
     NUMBER = auto()
     STRING = auto()
@@ -34,6 +36,7 @@ class TokenType(Enum):
     DEDENT = auto()
     IDENTIFIER = auto()
     NEWLINE = auto()
+    RETURN_TYPE = auto()
     EOF = auto()
 
 @dataclass
@@ -41,55 +44,6 @@ class Token:
     type: TokenType
     span: SourceSpan
     value: any
-
-class NumberType:
-    type_str: str
-
-# this enum is in the form
-# (type_str, is_unsigned, bits)
-class IntType(NumberType, Enum):
-    U8 = ("u8", False, 8)
-    I8 = ("i8", True, 8)
-    U16 = ("u16", False, 16)
-    I16 = ("i16", True, 16)
-    U32 = ("u32", False, 32)
-    I32 = ("i32", True, 32)
-    U64 = ("u64", False, 64)
-    I64 = ("i64", True, 64)
-    U128 = ("u128", False, 128)
-    I128 = ("i128", True, 128)
-
-    type_str: str
-    is_unsigned: bool
-    bits: int
-    def __init__(self, type_str: str, is_unsigned: bool, bits: int):
-        self.type_str = type_str
-        self.is_unsigned = is_unsigned
-        self.bits = bits
-
-
-# this enum is in the form
-# (type_str, bits)
-class FloatType(NumberType, Enum):
-    F32 = ("f32", 32)
-    F64 = ("f64", 64)
-    
-    type_str: str
-    bits: int
-    def __init__(self, type_str: str, bits: int):
-        self.type_str = type_str
-        self.bits = bits
-
-@dataclass
-class NumberLiteral:
-    type: NumberType | None
-    value: int | float
-
-class LexerState(Enum):
-    DEFAULT = auto()
-    PARSE_NUMBER = auto()
-    PARSE_NUMBER_HEX = auto()
-    PARSE_NUMBER_BINARY = auto()
 
 class Lexer:
     # constants
@@ -111,6 +65,8 @@ class Lexer:
         "obj": TokenType.KEYWORD_OBJ,
         "fun": TokenType.KEYWORD_FUN,
         "ret": TokenType.KEYWORD_RET,
+        "__asm__": TokenType.KEYWORD_ASM,
+        "extern": TokenType.KEYWORD_EXTERN,
     }
 
     # variables
@@ -189,59 +145,17 @@ class Lexer:
         self.col += count
 
     # conversion methods for IR
-    def parse_num(self, num_text: str, num_type: NumberType | None, is_decimal=False, base=10) -> int | float:
-        # parse float types
+    def parse_num(self, num_text: str, num_type: str | None, is_decimal=False, base=10) -> NumberLiteral:
         if is_decimal:
-            value = float(num_text.lower())
-
-            # check type conflict
-            if isinstance(num_type, IntType):
-                # TODO: proper error handling
-                raise ValueError(
-                    f"invalid integer type {num_type.type_str} for decimal value {num_text}")
+            return FloatLiteral(
+                type=num_type,
+                value=float(num_text)
+            )
         else:
-            value = int(num_text, base=base)
-
-            if isinstance(num_type, IntType):
-                # check integer bounds
-                if num_type.is_unsigned:
-                    min_val = 0
-                    max_val = (1 << num_type.bits) - 1
-                else:
-                    min_val = -(1 << (num_type.bits - 1))
-                    max_val = (1 << (num_type.bits - 1)) - 1
-
-                if value < min_val or value > max_val:
-                    # TODO: error handling
-                    raise ValueError(
-                        f"{num_type.type_str} overflow: {value} not in [{min_val}, {max_val}]")
-
-        return value
-
-    # helper methods for reading suffixes/types from a number
-    def read_number_type(self) -> IntType:
-        maybe_type = self.peek(4)
-        
-        for type in IntType:
-            type_len = len(type.type_str)
-            if maybe_type[:type_len] == type.type_str:
-                self.advance(type_len)
-                return type
-
-        return None
-    
-    def read_fnumber_type(self) -> FloatType:
-        maybe_type = self.peek(3)
-        
-        # this could be much simpler but for
-        # extensibility this is the way it is (f128 coming?)
-        for type in FloatType:
-            type_len = len(type.type_str)
-            if maybe_type[:type_len] == type.type_str:
-                self.advance(type_len)
-                return type
-        
-        return None
+            return IntLiteral(
+                type=num_type,
+                value=int(num_text, base=base),
+            )
 
     # read a normal number (base 10)
     def read_num(self):
@@ -280,21 +194,14 @@ class Lexer:
                 is_decimal = True
 
             # handle number suffix
-            maybe_type = self.read_number_type()
-            if maybe_type != None:
-                num_type = maybe_type
-                break
-
-            # handle floating number suffix
-            maybe_type = self.read_fnumber_type()
-            if maybe_type != None:
+            maybe_type = self.read_word()
+            if maybe_type:
                 num_type = maybe_type
                 break
 
             break
 
-        value = self.parse_num(num_text, num_type, is_decimal=is_decimal)
-        return NumberLiteral(type=num_type, value=value)
+        return self.parse_num(num_text, num_type, is_decimal=is_decimal)
 
     # read a hexadecimal value 0xABCdef
     def read_num_hex(self):
@@ -332,8 +239,7 @@ class Lexer:
 
             break
 
-        value = self.parse_num(num_text, num_type, base=16)
-        return NumberLiteral(type=num_type, value=value)
+        return self.parse_num(num_text, num_type, base=16)
     
     # read a binary number 0b10101
     def read_num_bin(self):
@@ -363,8 +269,7 @@ class Lexer:
 
             break
 
-        value = self.parse_num(num_text, num_type, base=2)
-        return NumberLiteral(type=num_type, value=value)
+        return self.parse_num(num_text, num_type, base=2)
     
     def read_string(self):
         str_text = ""
@@ -459,6 +364,14 @@ class Lexer:
         while self.has():
             c = self.curr()
 
+            # skip comments
+            if c == "#":
+                while self.has():
+                    if self.curr() == "\n":
+                        break
+
+                    self.advance()
+                continue
 
             # handle newline
             if c == "\n":
@@ -478,7 +391,7 @@ class Lexer:
                 token_span = self.end_span()
 
                 # skip empty lines
-                if not self.has() or self.curr() == "\n":
+                if not self.has() or self.curr() in ["\n", "#"]:
                     continue
 
                 # indent by one
@@ -559,6 +472,18 @@ class Lexer:
                 ))
                 continue
 
+            # handle return token
+            if self.peek(2) == "->":
+                self.start_span()
+                self.advance(2)
+                span = self.end_span()
+                self.tokens.append(Token(
+                    type=TokenType.RETURN_TYPE,
+                    span=span,
+                    value=None,
+                ))
+                continue
+
             # handle single char tokens
             if c in self.single_char_tokens:
                 self.push_single_char_token(self.single_char_tokens[c])
@@ -593,21 +518,10 @@ class Lexer:
 if __name__ == "__main__":
     lexer = Lexer()
     lexer.process("""
-var counter = 0
+extern ASM("print_number") fun print_number(num: i32) -> void
 
-fun increase(counter: i32)
-    print("counter is currently", counter)
-    ret counter + 1
-
-counter = increase(counter)
-counter = increase(counter)
-counter = increase(counter)
-counter = increase(counter)
-
-10
-0b101010u8
-0xABCDEFi32
-1.0e-5f32
+ASM("main") fun main()
+    print_number(1i32 + 2i32)
 """)
     tokens = lexer.finish()
 

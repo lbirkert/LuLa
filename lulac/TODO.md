@@ -1,0 +1,31 @@
+- Expand numeric expressions
+    - Unary Operation (-5)
+    - Multiply, Divide, Power, Operator Precedence!
+- Implement objects
+    - Implement operators
+        - Fix current implementation
+        - Think about making ints defined using ObjectType
+    - Defining objects
+    - Code Generation
+        - Allocation
+        - Initializing
+        - Generating methods
+        - Getting fields
+        - Freeing
+- Implement assign add/sub/... operations
+    - assign add
+    - assign sub
+    - assign mul
+    - assign div
+    - assign 
+- Implement strings
+    - Implement string constants
+    - Implement string operations
+        - Adding strings together
+- Implement module system
+    - Defining a module
+    - Importing a module
+    - Handling dependencies to external types
+    - Handling cyclic imports
+- Implement proper std lib
+- Hash IR instead of file contents

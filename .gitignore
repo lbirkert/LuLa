@@ -6,6 +6,10 @@
 !justfile
 !LICENSE
 
+venv/
 __pycache__/
 lulavm/
 .vscode/
+target/
+
+.DS_Store
