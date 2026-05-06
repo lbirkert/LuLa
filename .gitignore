@@ -6,6 +6,7 @@
 !justfile
 !LICENSE
 
+.venv/
 venv/
 __pycache__/
 lulavm/
