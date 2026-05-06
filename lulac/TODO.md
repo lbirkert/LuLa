@@ -28,4 +28,6 @@
     - Handling dependencies to external types
     - Handling cyclic imports
 - Implement proper std lib
+- Implement constant folding pass in semantic analysis
 - Hash IR instead of file contents
+- Further document compiler (semantic analysis, codegen)
