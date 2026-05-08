@@ -1,6 +1,5 @@
 - Expand numeric expressions
-    - Unary Operation (-5)
-    - Multiply, Divide, Power, Operator Precedence!
+    - Power, Remainder Operator Precedence!
 - Implement objects
     - Implement operators
         - Fix current implementation
@@ -18,16 +17,11 @@
     - assign mul
     - assign div
     - assign 
+- Bitwise operations
 - Implement strings
     - Implement string constants
     - Implement string operations
         - Adding strings together
-- Implement module system
-    - Defining a module
-    - Importing a module
-    - Handling dependencies to external types
-    - Handling cyclic imports
-- Implement proper std lib
 - Implement constant folding pass in semantic analysis
 - Hash IR instead of file contents
 - Further document compiler (semantic analysis, codegen)

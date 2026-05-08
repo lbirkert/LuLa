@@ -1,12 +1,34 @@
-from .core import SourceSpan
+from .core import SourceSpan, Ident
 from .lexer import Lexer, TokenType, Token
-from .ast_nodes import BinaryOp, Program, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr
+from .ast_nodes import BinaryOp, UnaryOp, Module, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, UnaryExpr, NumberExpr, StringExpr
+
+from pathlib import Path
 
 # the parser itself
 class Parser:
     binary_ops = {
         TokenType.PLUS: BinaryOp.ADD,
         TokenType.MINUS: BinaryOp.SUB,
+        TokenType.STAR: BinaryOp.MUL,
+        TokenType.SLASH: BinaryOp.DIV,
+    }
+
+    precedence = {
+        # TokenType.OR: 1,
+        # TokenType.AND: 2,
+        # TokenType.EQ: 3,
+
+        TokenType.PLUS: 4,
+        TokenType.MINUS: 4,
+        TokenType.STAR: 5,
+        TokenType.SLASH: 5,
+    }
+
+    associativity = {
+        TokenType.PLUS: "left",
+        TokenType.MINUS: "left",
+        TokenType.STAR: "left",
+        TokenType.SLASH: "left",
     }
 
     buffer: list[Token]
@@ -18,10 +40,15 @@ class Parser:
 
     last_span: SourceSpan | None
 
-    program: Program
+    curr_path: Path
+    search_paths: dict[str, Path] # paths to lookup files
 
-    def __init__(self):
-        self.program = Program([], [])
+    module: Module
+
+    def __init__(self, curr_path: Path, search_paths: list[Path] = [], ident: Ident | None = None):
+        self.curr_path = curr_path
+        self.search_paths = search_paths
+        self.module = Module(ident if ident else Ident.of(str(curr_path)), curr_path, {}, {}, [])
 
         # prob not needed, good to init anyways
         self.buffer = []
@@ -70,6 +97,51 @@ class Parser:
             return False
 
         return True
+    
+    # search for an import
+    def find_import(self, dest: str) -> Path:
+        # search in a specific place
+        if ":" in dest:
+            parts = dest.split(":")
+            if len(parts) != 2:
+                raise Exception(f"import: malformed import {dest}: too many colons")
+            search_path, dest = parts
+
+            if search_path not in self.search_paths:
+                raise Exception(f"import: search path {search_path} for import {dest} could not be found")
+            
+            search_path = self.search_paths[search_path]
+            
+            # TODO: recursively walk? -> prob not
+            maybe_path = search_path / dest
+            if maybe_path.exists():
+                return maybe_path
+            
+            raise Exception(f"import: path {maybe_path} for import {dest} does not exist")
+
+        # else: search in curr path
+        maybe_path = self.curr_path.parent / dest
+        if maybe_path.exists():
+            return maybe_path
+        
+        raise Exception(f"import: path {maybe_path} for import {dest} does not exist")
+
+        # think whether this makes sense:
+        # for path in self.search_paths:
+        #     maybe_path = path / dest
+        #     if maybe_path.exists():
+
+    # parse import
+    def parse_import(self) -> tuple[str, str]:
+        assert(self.curr().type == TokenType.KEYWORD_IMPORT)
+        self.advance()
+
+        path = self.expect(TokenType.STRING).value
+        self.expect(TokenType.KEYWORD_AS)
+        symbol = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.NEWLINE)
+
+        return path, symbol
 
     # parse type
     def parse_type(self) -> TypeRef:
@@ -130,6 +202,7 @@ class Parser:
                     break
 
         return Function(
+            ident=self.module.ident.sub(name),
             name=name,
             args=args,
             is_extern=self.is_extern == True,
@@ -209,19 +282,38 @@ class Parser:
         )
 
     def parse_expr(self) -> Expr:
+        return self.parse_unary()
+    
+    # parse unary expressions
+    def parse_unary(self):
+        if self.match(TokenType.MINUS):
+            expr = self.parse_expr()
+            return UnaryExpr(op=UnaryOp.NEG, inner=expr)
+        
         return self.parse_binary()
 
     # parse binary expressions
-    def parse_binary(self):
+    def parse_binary(self, min_prec=0):
         left = self.parse_postfix()
 
         while self.has():
             op_token = self.curr()
+
             if op_token.type not in self.binary_ops:
                 break
-            
+
+            # precedence handling
+            prec = self.precedence[op_token.type]
+            if prec < min_prec:
+                break
+
+            assoc = self.associativity.get(op_token.type, "left")
+
             self.advance()
-            right = self.parse_postfix()
+
+            next_min_prec = prec + 1 if assoc == "left" else prec
+
+            right = self.parse_binary(next_min_prec)
 
             left = BinaryExpr(
                 left=left,
@@ -307,6 +399,14 @@ class Parser:
                 self.advance()
                 continue              
 
+            if c.type == TokenType.KEYWORD_IMPORT:
+                dest, symbol = self.parse_import()
+                if symbol in self.module.imports:
+                    raise Exception(f"import: cannot redefine existing import symbol {symbol}")
+                path = self.find_import(dest)
+                self.module.imports[symbol] = path
+                continue
+
             if c.type == TokenType.KEYWORD_EXTERN:
                 self.advance()
                 self.is_extern = True
@@ -321,7 +421,10 @@ class Parser:
 
             # handle functions
             if c.type == TokenType.KEYWORD_FUN:
-                self.program.functions.append(self.parse_function())
+                func = self.parse_function()
+                if func.name in self.module.functions:
+                    raise Exception(f"redefinition of function {func.name}")
+                self.module.functions[func.name] = func
                 self.is_extern = None
                 self.asm_name = None
                 continue
@@ -332,15 +435,15 @@ class Parser:
             if self.asm_name is not None:
                 raise ValueError("expected fun keyword after __asm__")
 
-            self.program.statements.append(self.parse_stmt())
+            self.module.statements.append(self.parse_stmt())
 
     def process(self, tokens: list[Token]):
         self.buffer = tokens
         self.buffer_idx = 0
         self.parse()
 
-    def finish(self) -> Program:
-        return self.program
+    def finish(self) -> Module:
+        return self.module
 
 
 if __name__ == "__main__":

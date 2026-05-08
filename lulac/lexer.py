@@ -17,6 +17,8 @@ class TokenType(Enum):
     KEYWORD_FUN = auto()
     KEYWORD_OBJ = auto()
     KEYWORD_RET = auto()
+    KEYWORD_AS = auto()
+    KEYWORD_IMPORT = auto()
     KEYWORD_EXTERN = auto()
     KEYWORD_ASM = auto()
     # values
@@ -29,6 +31,8 @@ class TokenType(Enum):
     RPAREN = auto()
     PLUS = auto()
     MINUS = auto()
+    STAR = auto()
+    SLASH = auto()
     COLON = auto()
     DOT = auto()
     # misc
@@ -37,6 +41,7 @@ class TokenType(Enum):
     IDENTIFIER = auto()
     NEWLINE = auto()
     RETURN_TYPE = auto()
+    POWER = auto()
     EOF = auto()
 
 @dataclass
@@ -57,16 +62,20 @@ class Lexer:
         ",": TokenType.COMMA,
         "+": TokenType.PLUS,
         "-": TokenType.MINUS,
+        "*": TokenType.STAR,
+        "/": TokenType.SLASH,
         ".": TokenType.DOT,
     }
 
     keywords = {
         "var": TokenType.KEYWORD_VAR,
-        "obj": TokenType.KEYWORD_OBJ,
         "fun": TokenType.KEYWORD_FUN,
         "ret": TokenType.KEYWORD_RET,
+        "import": TokenType.KEYWORD_IMPORT,
+        "as": TokenType.KEYWORD_AS,
         "__asm__": TokenType.KEYWORD_ASM,
         "extern": TokenType.KEYWORD_EXTERN,
+        # "obj": TokenType.KEYWORD_OBJ,
     }
 
     # variables
@@ -479,6 +488,17 @@ class Lexer:
                 span = self.end_span()
                 self.tokens.append(Token(
                     type=TokenType.RETURN_TYPE,
+                    span=span,
+                    value=None,
+                ))
+                continue
+
+            if self.peek(2) == "**":
+                self.start_span()
+                self.advance(2)
+                span = self.end_span()
+                self.tokens.append(Token(
+                    type=TokenType.POWER,
                     span=span,
                     value=None,
                 ))

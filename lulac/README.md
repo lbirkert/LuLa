@@ -35,7 +35,7 @@ structures like numbers which can - apart from being hexadecimal or binary - als
 ### 2. Parsing (parser.py)
 
 Here the compiler uses this sequence of tokens to generate an AST-representation (abstract syntax
-tree) of the programm. It parses certain operations in a tree-wise manner. An example of this is
+tree) of the program. It parses certain operations in a tree-wise manner. An example of this is
 the binary expression which has a LHS (left hand side) and a RHS (right hand side). Both LHS and RHS
 are of type expression and can therefore point to other operations. Below you can see an example
 of how this will look like.

@@ -5,6 +5,7 @@ from pathlib import Path
 from .compiler import Compiler
 from .parser import Parser
 from .lexer import Lexer
+from .semantic import SemanticAnalyzer
 
 
 def compile_file(
@@ -12,9 +13,12 @@ def compile_file(
     output_path: Path | None,
     print_tokens: bool,
     print_ast: bool,
+    print_sem: bool,
     print_ir: bool,
 ) -> Path | None:
     source = input_path.read_text()
+    curr_path = input_path
+    search_paths = {}
 
     compiler = Compiler()
 
@@ -22,27 +26,31 @@ def compile_file(
     # DEBUG PIPELINE (manual)
     # -------------------------
 
-    if print_tokens or print_ast:
+    if print_tokens:
         lexer = Lexer()
         lexer.process(source)
         tokens = lexer.finish()
 
-        if print_tokens:
-            print("\n".join(f"{t.type}: {t.value}" for t in tokens))
-
-        parser = Parser()
-        parser.process(tokens)
-        ast = parser.finish()
-
-        if print_ast:
-            print(ast.format())
-
-        if print_tokens or print_ast:
-            return
+        print("\n".join(f"{t.type}: {t.value}" for t in tokens))
+        return
         
+    if print_ast:
+        modules = compiler.parse_modules(curr_path, search_paths)
+
+        print("\n\n".join([ module.format() for module in modules.values() ]))
+        return
+
+    if print_sem:
+        modules = compiler.parse_modules(curr_path, search_paths)
+        analyzer = SemanticAnalyzer()
+        typed_modules = analyzer.analyze(modules)
+        
+        print("\n\n".join([ module.format() for module in typed_modules.values() ]))
+        return
+
     # print IR to stdout
     if print_ir:
-        ir = compiler.compile_to_ir(input_path.read_bytes().decode())
+        ir = compiler.compile_to_ir(input_path, search_paths)
         print(ir)
         return
 
@@ -62,7 +70,7 @@ def compile_file(
             return compiler.compile_to_object(str(input_path), output_path)
 
     # Otherwise → full executable
-    return compiler.compile(str(input_path), output=output_path)
+    return compiler.compile(input_path, search_paths, output=output_path)
 
 
 # -------------------------
@@ -110,6 +118,12 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
+        "--print-sem",
+        action="store_true",
+        help="Print typed AST after semantic analysis",
+    )
+    
+    parser.add_argument(
         "--print-ir",
         action="store_true",
         help="Print IR to stdout",
@@ -118,7 +132,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run",
         action="store_true",
-        help="Run the programm after compiling",
+        help="Run the program after compiling",
     )
 
     parser.add_argument(
@@ -147,6 +161,7 @@ def main(argv=None):
         output_path=args.output,
         print_tokens=args.print_tokens,
         print_ast=args.print_ast,
+        print_sem=args.print_sem,
         print_ir=args.print_ir,
     )
 

@@ -1,11 +1,6 @@
-extern __asm__("print_number") fun print_number(num: i32) -> void
+import "std.lula" as std
 
 __asm__("main") fun main()
-    var a: i32 = 0
-    a = a + 10
-
-    var b: i32 = a + 5
-    b = b + a + 2
-
-    print_number(a)
-    print_number(b)
+    var some = std.print_number
+    some(1)
+    std.print_number(1 + (4 / 3))

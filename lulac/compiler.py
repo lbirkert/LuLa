@@ -3,6 +3,7 @@ from .codegen import IRGenerator
 from .semantic import SemanticAnalyzer
 from .lexer import Lexer
 from .parser import Parser
+from .ast_nodes import Module
 from pathlib import Path
 import subprocess
 from llvmlite import binding as llvm
@@ -43,24 +44,49 @@ class Compiler:
         std = self.target_dir / "std.o"
         return obj, exe, std
 
+    def parse_modules(self, input_path: Path, search_paths: dict[str, Path], source: str | None = None) -> dict[Path, Module]:
+        files_to_process = [input_path]
+        output = {}
+
+        while files_to_process:
+            curr_file = files_to_process.pop()
+            # check already processed
+            if curr_file in output:
+                continue
+
+            if curr_file == input_path and source != None:
+                contents = source
+            else:
+                contents = curr_file.read_text()
+
+            lexer = Lexer()
+            lexer.process(contents)
+            tokens = lexer.finish()
+
+            parser = Parser(curr_file, search_paths)
+            parser.process(tokens)
+            module = parser.finish()
+
+            output[curr_file] = module
+
+            files_to_process.extend(module.imports.values())
+        
+        return output
+
+
     # -------------------------
     # FRONTEND PIPELINE
     # -------------------------
 
-    def compile_to_ir(self, source: str):
-        lexer = Lexer()
-        lexer.process(source)
-        tokens = lexer.finish()
+    def compile_to_ir(self, input_path: Path, search_paths: dict[str, Path], source: str | None = None):
+        modules = self.parse_modules(input_path, search_paths, source)
 
-        parser = Parser()
-        parser.process(tokens)
-        ast = parser.finish()
 
         analyzer = SemanticAnalyzer()
-        typed_program = analyzer.analyze(ast)
+        typed_modules = analyzer.analyze(modules)
 
         generator = IRGenerator()
-        module = generator.generate(typed_program)
+        module = generator.generate(typed_modules)
 
         return str(module)
 
@@ -68,9 +94,7 @@ class Compiler:
     # IR → OBJECT
     # -------------------------
 
-    def compile_to_object(self, source: str, obj_path: Path):
-        llvm_ir = self.compile_to_ir(source)
-
+    def compile_to_object(self, obj_path: Path, llvm_ir: str):
         mod = llvm.parse_assembly(llvm_ir)
         mod.verify()
 
@@ -124,14 +148,13 @@ class Compiler:
     # FULL PIPELINE
     # -------------------------
 
-    def compile(self, source: str, output: str | None = None):
-        with open(source, "r") as f:
-            source_txt = f.read()
-        
-        name = self._infer_name(source_txt, output)
+    def compile(self, input_path: Path, search_paths: dict[str, Path], source: str | None = None, output: str | None = None):
+        llvm_ir = self.compile_to_ir(input_path, search_paths, source)
+
+        name = self._infer_name(llvm_ir, output)
         obj_path, exe_path, std_obj_path = self._paths(name)
 
-        user_obj = self.compile_to_object(source_txt, obj_path)
+        user_obj = self.compile_to_object(obj_path, llvm_ir)
         std_obj = self.compile_std(std_obj_path)
 
         exe = self.link_executable([user_obj, std_obj], exe_path)

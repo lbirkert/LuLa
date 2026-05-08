@@ -1,6 +1,9 @@
-from .core import SourceSpan, NumberLiteral
+from .core import SourceSpan, NumberLiteral, Ident
+
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
+from pathlib import Path
 
 def pad(indent: int) -> str:
     return "  " * indent
@@ -9,6 +12,8 @@ def fmt_sem(node: AstNode):
     return f" : {node.sem_type}" if getattr(node, "sem_type", None) is not None else ""
 
 class AstNode:
+    sem_type: Any | None
+
     def __init__(self):
         self.sem_type = None        # resolved type (after semantic analysis)
 
@@ -39,10 +44,28 @@ class StringExpr(Expr):
     def format(self, indent: int = 0) -> str:
         return f'{pad(indent)}StringExpr("{self.value}"{fmt_sem(self)})'
 
+class UnaryOp(Enum):
+    NEG = "neg"
+
+    def __init__(self, op_name: str):
+        self.op_name = op_name
+
+@dataclass
+class UnaryExpr(Expr):
+    op: UnaryOp
+    inner: Expr
+    
+    def format(self, indent: int = 0) -> str:
+        return (
+            f"{pad(indent)}UnaryExpr({self.op.name}{fmt_sem(self)})\n"
+            f"{self.inner.format(indent + 1)}"
+        )
+
 class BinaryOp(Enum):
     ADD = "add"
     SUB = "sub"
     MUL = "mul"
+    DIV = "div"
 
     def __init__(self, op_name: str):
         self.op_name = op_name
@@ -173,31 +196,8 @@ class TypeRef(AstNode):
         return ".".join(self.parts)
 
 @dataclass
-class Program(AstNode):
-    functions: list[Function]
-    statements: list[Stmt]
-
-    def format(self, indent: int = 0) -> str:
-        functions_str = (
-            "\n".join(f.format(indent + 2) for f in self.functions)
-            if self.functions
-            else f"{pad(indent + 2)}<no functions>"
-        )
-
-        statements_str = (
-            "\n".join(s.format(indent + 2) for s in self.statements)
-            if self.statements
-            else f"{pad(indent + 2)}<no statements>"
-        )
-
-        return (
-            f"{pad(indent)}Program\n"
-            f"{pad(indent + 1)}Functions:\n{functions_str}\n"
-            f"{pad(indent + 1)}Statements:\n{statements_str}"
-        )
-
-@dataclass
 class Function(AstNode):
+    ident: Ident
     name: str
     asm_name: str | None
     is_extern: bool
@@ -224,4 +224,39 @@ class Function(AstNode):
             f"{pad(indent + 1)}Args:\n{args_str}\n"
             f"{pad(indent + 1)}ReturnType:\n{ret_str}\n"
             f"{pad(indent + 1)}Body:\n{body_str}"
+        )
+
+
+@dataclass
+class Module(AstNode):
+    ident: Ident
+    curr_path: Path
+    imports: dict[str, Path] # symbol -> path
+    functions: dict[str, Function] # symbol -> Function
+    statements: list[Stmt]
+
+    def format(self, indent: int = 0) -> str:
+        imports_str = (
+            "\n".join(f"{pad(indent + 2)} {s} -> {p}" for (s, p) in self.imports.items())
+            if self.imports
+            else f"{pad(indent + 2)}<no imports>"
+        )
+
+        functions_str = (
+            "\n".join(f.format(indent + 2) for f in self.functions.values())
+            if self.functions
+            else f"{pad(indent + 2)}<no functions>"
+        )
+
+        statements_str = (
+            "\n".join(s.format(indent + 2) for s in self.statements)
+            if self.statements
+            else f"{pad(indent + 2)}<no statements>"
+        )
+
+        return (
+            f"{pad(indent)}Module({self.curr_path}):\n"
+            f"{pad(indent + 1)}Imports:\n{imports_str}\n"
+            f"{pad(indent + 1)}Functions:\n{functions_str}\n"
+            f"{pad(indent + 1)}Statements:\n{statements_str}"
         )

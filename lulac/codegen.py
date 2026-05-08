@@ -1,12 +1,16 @@
-# codegens not perfect yet. Still missing: modules, imports
+# codegens not perfect yet. Still missing: objects
 
-from .ast_nodes import Program, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr
+from .core import Ident
+from .ast_nodes import Module, UnaryExpr, UnaryOp, BinaryOp, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr
 from .semantic import SemanticAnalyzer, VoidType, IntType, FuncType
 from .lexer import Lexer
 from .parser import Parser
 from llvmlite import ir
+from pathlib import Path
 
 class IRGenerator:
+    functions: dict[Ident, ir.Function]
+
     def __init__(self):
         self.module = ir.Module(name="module")
         self.builder = None
@@ -24,7 +28,17 @@ class IRGenerator:
             return ir.IntType(t.bits)
         if isinstance(t, VoidType):
             return ir.VoidType()
+        if isinstance(t, FuncType):
+            return self.functions[t.ident].type
         raise Exception(f"unknown type: {t}")
+    
+    # maybe do this through LuLa directly
+    def declare_std(self):
+        arg_types = [ir.IntType(32), ir.IntType(32)]
+        ret_type = ir.IntType(32)
+        fn_type = ir.FunctionType(ret_type, arg_types)
+        fn = ir.Function(self.module, fn_type, name="mod_eu_i32")
+        self.functions["mod_eu_i32"] = fn
 
     # -------------------------
     # DECLARE FUNCTIONS
@@ -40,17 +54,17 @@ class IRGenerator:
 
         fn_type = ir.FunctionType(ret_type, arg_types)
 
-        name = func.asm_name if func.asm_name else func.name
+        name = func.asm_name if func.asm_name else str(func.ident)
         fn = ir.Function(self.module, fn_type, name=name)
 
-        self.functions[func.name] = fn
+        self.functions[func.ident] = fn
 
     # -------------------------
     # EMIT FUNCTION BODY
     # -------------------------
 
-    def emit_function(self, f):
-        fn = self.functions[f.name]
+    def emit_function(self, func: Function):
+        fn = self.functions[func.ident]
 
         block = fn.append_basic_block("entry")
         self.builder = ir.IRBuilder(block)
@@ -58,7 +72,7 @@ class IRGenerator:
         self.locals = {}
 
         # allocate and store args
-        for i, (name, _) in enumerate(f.args):
+        for i, (name, _) in enumerate(func.args):
             if name:
                 arg = fn.args[i]
                 ptr = self.builder.alloca(arg.type)
@@ -66,7 +80,7 @@ class IRGenerator:
                 self.locals[name] = ptr
 
         # body
-        for stmt in f.body:
+        for stmt in func.body:
             self.emit_stmt(stmt)
 
         # ensure terminator
@@ -74,7 +88,7 @@ class IRGenerator:
             if isinstance(fn.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
-                raise Exception(f"missing return in function {f.name}")
+                raise Exception(f"missing return in function {func.name}")
 
     # -------------------------
     # STATEMENTS
@@ -109,7 +123,7 @@ class IRGenerator:
     # EXPRESSIONS
     # -------------------------
 
-    def emit_expr(self, expr):
+    def emit_expr(self, expr: Expr):
         # Number
         if isinstance(expr, NumberExpr):
             t = self.llvm_type(expr.sem_type)
@@ -125,46 +139,56 @@ class IRGenerator:
             l = self.emit_expr(expr.left)
             r = self.emit_expr(expr.right)
 
-            if expr.op.op_name == "add":
-                return self.builder.add(l, r)
-            if expr.op.op_name == "sub":
-                return self.builder.sub(l, r)
-            if expr.op.op_name == "mul":
-                return self.builder.mul(l, r)
+            if isinstance(expr.left.sem_type, IntType):
+                if expr.op == BinaryOp.ADD:
+                    return self.builder.add(l, r)
+                if expr.op == BinaryOp.SUB:
+                    return self.builder.sub(l, r)
+                if expr.op == BinaryOp.MUL:
+                    return self.builder.mul(l, r)
+                if expr.op == BinaryOp.DIV:
+                    if expr.left.sem_type.is_unsigned:
+                        return self.builder.udiv(l, r)
+                    else:
+                        return self.builder.sdiv(l, r)
 
-            raise Exception(f"unknown binary op: {expr.op}")
+            raise Exception(f"unknown binary op {expr.op} for type {expr.left.sem_type}")
 
         # # Unary
-        # if isinstance(expr, UnaryExpr):
-        #     val = self.emit_expr(expr.operand)
+        if isinstance(expr, UnaryExpr):
+            val = self.emit_expr(expr.inner)
 
-        #     if expr.op == UnaryOp.NEG:
-        #         zero = ir.Constant(val.type, 0)
-        #         return self.builder.sub(zero, val)
+            if expr.op == UnaryOp.NEG:
+                zero = ir.Constant(val.type, 0)
+                return self.builder.sub(zero, val)
 
-        #     raise Exception(f"unknown unary op: {expr.op}")
+            raise Exception(f"unknown unary op: {expr.op}")
 
         # Call
         if isinstance(expr, CallExpr):
-            if not isinstance(expr.callee, IdentifierExpr):
-                raise Exception("only simple function calls supported")
+            ptr = self.emit_expr(expr.callee)
 
-            fn = self.functions[expr.callee.name]
             args = [self.emit_expr(arg_expr) for _, arg_expr in expr.args]
 
-            return self.builder.call(fn, args)
+            return self.builder.call(ptr, args)
+        
+        if isinstance(expr, MemberExpr):
+            if isinstance(expr.sem_type, FuncType):
+                return self.functions[expr.sem_type.ident]
 
         raise Exception(f"unknown expr: {type(expr)}")
 
-    def generate(self, program: Program):
-        # declare all functions
-        for func in program.functions:
-            self.declare_function(func, func.sem_type)
+    def generate(self, modules: dict[Path, Module]):
+        for (_path, module) in modules.items():
+            # declare all functions
+            for (_, func) in module.functions.items():
+                self.declare_function(func, func.sem_type)
 
-        # emit bodies
-        for func in program.functions:
-            if not func.is_extern:
-                self.emit_function(func)
+        for (_path, module) in modules.items():
+            # emit bodies
+            for (_, func) in module.functions.items():
+                if not func.is_extern:
+                    self.emit_function(func)
 
         return self.module
 

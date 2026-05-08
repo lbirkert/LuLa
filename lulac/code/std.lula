@@ -1,0 +1,8 @@
+# euclidian style modulo
+extern __asm__("mod_eu_i8")  fun mod_eu_i8 (a: i8,  b: i8)  -> u8
+extern __asm__("mod_eu_i16") fun mod_eu_i16(a: i16, b: i16) -> u16
+extern __asm__("mod_eu_i32") fun mod_eu_i32(a: i32, b: i32) -> u32
+extern __asm__("mod_eu_i64") fun mod_eu_i64(a: i64, b: i64) -> u64
+
+# for now the only printing function
+extern __asm__("print_number") fun print_number(num: i32) -> void
