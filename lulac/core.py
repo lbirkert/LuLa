@@ -30,7 +30,7 @@ class Ident:
         return Ident(segs=self.segs+[seg])
     
     def subs(self, seg: str) -> str:
-        return self.to_str() + "::" + seg
+        return str(self) + "::" + seg
 
 @dataclass
 class SourceSpan:
@@ -39,6 +39,8 @@ class SourceSpan:
     start_line: int
     start_col: int
     raw_text: str | None
+
+    # col and line are indicies
 
     def combine(a: SourceSpan, b: SourceSpan) -> SourceSpan:
         return SourceSpan(
@@ -53,4 +55,4 @@ class SourceSpan:
         return self.end_offset - self.start_offset
     
     def __repr__(self):
-        return f"Ln {self.start_line}, Col {self.start_col} ({self.len()})"
+        return f"Ln {self.start_line + 1}, Col {self.start_col + 1} ({self.len()})"

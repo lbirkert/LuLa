@@ -46,6 +46,8 @@ class StringExpr(Expr):
 
 class UnaryOp(Enum):
     NEG = "neg"
+    REF = "ref"
+    DEREF = "deref"
 
     def __init__(self, op_name: str):
         self.op_name = op_name
@@ -82,7 +84,7 @@ class BinaryExpr(Expr):
             f"{self.left.format(indent + 1)}\n"
             f"{self.right.format(indent + 1)}"
         )
-
+    
 @dataclass
 class CallExpr(Expr):
     callee: Expr
@@ -182,7 +184,6 @@ class ReturnStmt(Stmt):
 # MISC
 # =========================
 
-# TODO: dedup this. This looks similar to Ident
 @dataclass
 class TypeRef(AstNode):
     parts: list[str]
@@ -226,13 +227,56 @@ class Function(AstNode):
             f"{pad(indent + 1)}Body:\n{body_str}"
         )
 
+@dataclass
+class Field(AstNode):
+    name: str
+    type: TypeRef
+    init: Expr
+
+    def format(self, indent: int = 0) -> str:
+        type_str = self.type.format(indent + 2) if self.type else f"{pad(indent + 2)}<no type>"
+        init_str = self.init.format(indent + 2) if self.init else f"{pad(indent + 2)}<no init>"
+
+        return (
+            f"{pad(indent)}Field({self.name}{fmt_sem(self)})\n"
+            f"{pad(indent + 1)}Type:\n{type_str}\n"
+            f"{pad(indent + 1)}Init:\n{init_str}"
+        )
+
+@dataclass
+class Object(AstNode):
+    ident: Ident
+    name: str
+    fields: list[Field]
+    functions: list[Function]
+    
+    def format(self, indent: int = 0) -> str:
+        functions_str = (
+            "\n".join(f.format(indent + 2) for f in self.functions)
+            if self.functions
+            else f"{pad(indent + 2)}<no functions>"
+        )
+
+        fields_str = (
+            "\n".join(f.format(indent + 2) for f in self.fields)
+            if self.fields
+            else f"{pad(indent + 2)}<no fields>"
+        )
+
+        return (
+            f"{pad(indent)}Object({self.name}{fmt_sem(self)})\n"
+            f"{pad(indent + 1)}Functions:\n{functions_str}\n"
+            f"{pad(indent + 1)}Fields:\n{fields_str}"
+        )
 
 @dataclass
 class Module(AstNode):
     ident: Ident
     curr_path: Path
     imports: dict[str, Path] # symbol -> path
+    # TODO: refactor back to list[Function]
     functions: dict[str, Function] # symbol -> Function
+    objects: list[Object]
     statements: list[Stmt]
 
     def format(self, indent: int = 0) -> str:
@@ -247,6 +291,12 @@ class Module(AstNode):
             if self.functions
             else f"{pad(indent + 2)}<no functions>"
         )
+        
+        objects_str = (
+            "\n".join(f.format(indent + 2) for f in self.objects)
+            if self.objects
+            else f"{pad(indent + 2)}<no objects>"
+        )
 
         statements_str = (
             "\n".join(s.format(indent + 2) for s in self.statements)
@@ -257,6 +307,7 @@ class Module(AstNode):
         return (
             f"{pad(indent)}Module({self.curr_path}):\n"
             f"{pad(indent + 1)}Imports:\n{imports_str}\n"
+            f"{pad(indent + 1)}Objects:\n{objects_str}\n"
             f"{pad(indent + 1)}Functions:\n{functions_str}\n"
             f"{pad(indent + 1)}Statements:\n{statements_str}"
         )

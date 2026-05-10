@@ -34,6 +34,7 @@ class TokenType(Enum):
     STAR = auto()
     SLASH = auto()
     COLON = auto()
+    AND = auto()
     DOT = auto()
     # misc
     INDENT = auto()
@@ -64,6 +65,7 @@ class Lexer:
         "-": TokenType.MINUS,
         "*": TokenType.STAR,
         "/": TokenType.SLASH,
+        "&": TokenType.AND,
         ".": TokenType.DOT,
     }
 
@@ -75,7 +77,7 @@ class Lexer:
         "as": TokenType.KEYWORD_AS,
         "__asm__": TokenType.KEYWORD_ASM,
         "extern": TokenType.KEYWORD_EXTERN,
-        # "obj": TokenType.KEYWORD_OBJ,
+        "obj": TokenType.KEYWORD_OBJ,
     }
 
     # variables

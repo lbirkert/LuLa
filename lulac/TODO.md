@@ -1,27 +1,34 @@
-- Expand numeric expressions
-    - Power, Remainder Operator Precedence!
-- Implement objects
-    - Implement operators
-        - Fix current implementation
-        - Think about making ints defined using ObjectType
-    - Defining objects
-    - Code Generation
-        - Allocation
-        - Initializing
-        - Generating methods
-        - Getting fields
-        - Freeing
+- Implement control flow
+    - Implement if/else/elif
+    - Implement while loop
 - Implement assign add/sub/... operations
     - assign add
     - assign sub
     - assign mul
     - assign div
     - assign 
-- Bitwise operations
+- Implement heap memory
 - Implement strings
     - Implement string constants
     - Implement string operations
         - Adding strings together
+- Implement expressions nice to have
+    - Power, Remainder, ...
+    - Bitwise operations
+- Implement object nice to have
+    - Implement operators
+        - Fix current implementation
+        - Think about making ints defined using ObjectType
+    - Code Generation
+        - Initializing (constructors?) -> later
+- Implement control flow nice to have
+    - Implement for loop
+    - Implement switch/match statements
+- Implement object inheritance
+- Implement function nice to have
+    - Positional arguments
 - Implement constant folding pass in semantic analysis
-- Hash IR instead of file contents
+- Implement better error reporting
+    - Modify SourceSpan to include ref of source code
+    - Use AI to modify the places where Exception is used and replace with SourceSpan reporting
 - Further document compiler (semantic analysis, codegen)

@@ -3,7 +3,7 @@
 from .core import Ident, IntLiteral, FloatLiteral
 from .lexer import Lexer
 from .parser import Parser
-from .ast_nodes import Module, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr, UnaryExpr
+from .ast_nodes import Module, Object, UnaryOp, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr, UnaryExpr
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +27,7 @@ class VoidType(Type):
 @dataclass
 class FuncType(Type):
     ident: Ident
+    self_type: Type | None
     args: list[tuple[str, Type]]
     ret: Type
 
@@ -34,6 +35,8 @@ class FuncType(Type):
         return f"{pad(indent)}FunType(\n{'\n'.join([f"{pad(indent+1)}{n}: {t.compact()}" for (n, t) in self.args])}\n{pad(indent+1)}->\n{self.ret.format(indent+2)}\n{pad(indent)})"
 
     def compact(self) -> str:
+        if self.self_type != None:
+            return f"FunType(({', '.join([f"{n}: {t.compact()}" for (n, t) in self.args[1:]])}) -> {self.ret.compact()})"
         return f"FunType(({', '.join([f"{n}: {t.compact()}" for (n, t) in self.args])}) -> {self.ret.compact()})"
 
     def __str__(self):
@@ -59,22 +62,56 @@ class TypeOf(Type):
         return self.compact()
 
 @dataclass
+class Ref(Type):
+    inner: Type
+
+    def format(self, indent = 0):
+        return f"{pad(indent)}Ref(\n{self.inner.format(indent+1)}\n)"
+    
+    def compact(self):
+        return f"Ref({self.inner.compact()})"
+    
+    def __str__(self):
+        return self.compact()
+    
+@dataclass
+class Deref(Type):
+    inner: Type
+
+    def format(self, indent = 0):
+        return f"{pad(indent)}Deref(\n{self.inner.format(indent+1)}\n)"
+    
+    def compact(self):
+        return f"Deref({self.inner.compact()})"
+    
+    def __str__(self):
+        return self.compact()
+
+@dataclass
 class Symbol:
     inner: Type
     is_public: bool # public means visible to all modules
-    is_static: bool # static symbols are accessable on the TypeOf(ObjectType)
+    is_static: bool # static symbols are also accessable on TypeOf(ObjectType) and are global constants internally
+    is_comp_const: bool # this declares whether values can be lowered directly (like functions on an object)
 
 class ObjectType(Type):
+    ident: Ident
     symbols: dict[str, Symbol] = {}
 
-    def __init__(self, symbols: dict[str, Symbol] = {}):
+    def __init__(self, ident: Ident, symbols: dict[str, Symbol] = {}):
+        self.ident = ident
         self.symbols = symbols
+
+    def define_symbol(self, name: str, symbol: Symbol):
+        if name in self.symbols:
+            raise Exception(f"redefinition of symbol {name} in object {self.ident}")
+        self.symbols[name] = symbol
 
     def format(self, indent = 0):
         return f"{pad(indent)}ObjType({{\n{',\n'.join([f'{pad(indent+1)}{n}: {s.inner.format(0)}' for (n, s) in self.symbols.items()])}\n{pad(indent)}}})"
     
     def compact(self):
-        return f"ObjType({{{', '.join([f'{n}: {s.inner.compact()}' for (n, s) in self.symbols.items()])}}})"
+        return f"ObjType({self.ident})"
     
     def __str__(self):
         return self.compact()
@@ -125,7 +162,6 @@ U32 = IntType.define("u32", 32, True)
 U64 = IntType.define("u64", 64, True)
 VOID = VoidType()
 
-
 class SymbolTable:
     symbols: list[dict[str, Type]]
 
@@ -161,50 +197,134 @@ class SymbolTable:
 
 class SemanticAnalyzer:
     symtab: SymbolTable
+    symtabs: dict[Path, SymbolTable]
     modules: dict[Path, Module]
 
     def __init__(self):
-        self.symtab = SymbolTable()
+        self.symtabs = {}
 
     def analyze(self, modules: dict[Path, Module]):
-        # build sem_type of module
-        for (path, module) in modules.items():
-            module.sem_type = ObjectType({})
-            self.collect_func_types(module)
-
-        # this step should be done only after collection.
+        # build shallow sem_type of modules
         for (path, module) in modules.items():
             self.symtab = SymbolTable()
+            module.sem_type = ObjectType(module.ident, {})
+        
+        # slightly extend depth of sem_type
+        for (path, module) in modules.items():
+            # define imports
+            for (symbol, path2) in module.imports.items():
+                self.symtab.define(symbol, modules[path2].sem_type)
+            # build shallow obj types
+            self.build_shallow_obj_types(module) 
+            # store symtab
+            self.symtabs[path] = self.symtab
+        
+        # build func_types and obj types
+        for (path, module) in modules.items():
+            # restore symtab
+            self.symtab = self.symtabs[path]
+            self.build_func_types(module)
+            self.build_obj_types(module)
 
-            # init functions to symbols
-            for (_, f) in module.functions.items():
-                self.symtab.define(f.name, f.sem_type)
-            
+        # look at func bodies (in module and objects)
+        for (path, module) in modules.items():
+            # restore symtab
+            self.symtab = self.symtabs[path]
+
             # init imports to symbols
             for (symbol, path) in module.imports.items():
                 self.symtab.define(symbol, modules[path].sem_type)
             
-            self.visit_program(module)
+            self.visit_module(module)
         
         return modules
 
-    def collect_func_types(self, module: Module):
-        for (_, func) in module.functions.items():
-            ret = self.resolve_type(func.ret_type) if func.ret_type else VOID
+    # forward declare func types
+    def build_func_type(self, func: Function, self_type: Type | None = None):
+        ret = self.resolve_type(func.ret_type) if func.ret_type else VOID
 
-            args = []
-            for name, typ in func.args:
-                args.append((name, self.resolve_type(typ)))
+        # assert self param
+        if self_type != None:
+            assert(len(func.args) > 0) # method has no self param
+            maybe_self = self.resolve_type(func.args[0][1])
+            if isinstance(maybe_self, Ref):
+                assert(maybe_self.inner == self_type) # method has no self param
+            else:
+                assert(maybe_self == self_type) # method has no self param
+            self_type = maybe_self
 
-            func.sem_type = FuncType(ident=func.ident, args=args, ret=ret)
-            module.sem_type.symbols[func.name] = Symbol(func.sem_type, True, False)
+        args = []
+        for name, typ in func.args:
+            args.append((name, self.resolve_type(typ)))
 
-    def visit_program(self, module: Module):
+        func.sem_type = FuncType(ident=func.ident, self_type=self_type, args=args, ret=ret)
+
+    def build_func_types(self, module: Module):
+        for func in module.functions.values():
+            self.build_func_type(func)
+            module.sem_type.define_symbol(func.name, Symbol(
+                inner=func.sem_type,
+                is_public=True,
+                is_static=True,
+                is_comp_const=True, # functions are comp consts
+            ))
+            self.symtab.define(func.name, func.sem_type)
+
+    # forward declare shallow obj types
+    def build_shallow_obj_types(self, module: Module):
+        for obj in module.objects:
+            obj.sem_type = ObjectType(obj.ident)
+            module.sem_type.define_symbol(obj.name, Symbol(
+                inner=TypeOf(obj.sem_type),
+                is_public=True,
+                is_static=True,
+                is_comp_const=True, # TypeOf() are always comp consts
+            ))
+            self.symtab.define(obj.name, TypeOf(obj.sem_type))
+
+    # forward declare obj types
+    def build_obj_types(self, module: Module):
+        for obj in module.objects:
+            self.symtab.push()
+            self.symtab.define("Self", TypeOf(obj.sem_type))
+            for func in obj.functions:
+                self.build_func_type(func, obj.sem_type)
+
+                obj.sem_type.define_symbol(func.name, Symbol(
+                    inner=func.sem_type,
+                    is_public=True,
+                    is_static=False,
+                    is_comp_const=True, # functions are comp consts
+                ))
+            
+            for field in obj.fields:
+                # FOR NOW: FIELD TYPES ARE REQUIRED
+                if not field.type:
+                    raise Exception(f"field type is required for {field.name}")
+
+                field.sem_type = self.resolve_type(field.type)
+
+                obj.sem_type.define_symbol(field.name, Symbol(
+                    inner=field.sem_type,
+                    is_public=True,
+                    is_static=False,
+                    is_comp_const=False,
+                ))
+            self.symtab.pop() # dont polute the symtab
+
+    def visit_module(self, module: Module):
         for (_, func) in module.functions.items():
             self.visit_function(func)
+        
+        for obj in module.objects:
+            self.visit_object(obj)
 
         for stmt in module.statements:
             self.visit_stmt(stmt, None)
+
+    def visit_object(self, obj: Object):
+        for func in obj.functions:
+            self.visit_function(func)
 
     def visit_function(self, func: Function):
         self.symtab.push()
@@ -250,20 +370,27 @@ class SemanticAnalyzer:
                     var_type = expr_type
                 
                 if expr_type != var_type:
-                    raise Exception("type mismatch in declaration")
+                    raise Exception(f"type mismatch in declaration var_t {var_type} expr_t {expr_type}")
 
             if var_type:
                 stmt.sem_type = var_type
                 self.symtab.define(stmt.name, var_type)
 
         elif isinstance(stmt, AssignStmt):
-            var_t = None
-            if isinstance(stmt.target, IdentifierExpr):
-                var_t = self.symtab.lookup(stmt.target.name)
-            
-            value_t = self.visit_expr(stmt.assign, var_t)
-            if var_t is not None and var_t != value_t:
-                raise Exception("type mismatch in assignment")
+            var_t = self.visit_expr(stmt.target, None, True)
+            value_t = self.visit_expr(stmt.assign, None, True)
+
+            # one side is not known, retry with new expected_type
+            if var_t == None or value_t == None:
+                if var_t == value_t:
+                    raise Exception(f"cannot infer type for statement:\n{stmt.format()}")
+                
+                expected_type = var_t if var_t != None else value_t
+                var_t = self.visit_expr(stmt.target, expected_type)
+                value_t = self.visit_expr(stmt.assign, expected_type)
+
+            if var_t != value_t:
+                raise Exception(f"type mismatch in assignment var_t {var_t} value_t {value_t}")
 
     def visit_number(self, expr: NumberExpr, expected_type: Type | None = None):
         if expr.value.type:
@@ -304,6 +431,20 @@ class SemanticAnalyzer:
         # UNARY OP
         if isinstance(expr, UnaryExpr):
             inner_type = self.visit_expr(expr.inner, expected_type)
+
+            if expr.op == UnaryOp.REF:
+                if isinstance(inner_type, TypeOf):
+                    expr.sem_type = TypeOf(Ref(inner_type.inner))
+                    return expr.sem_type
+                expr.sem_type = Ref(inner_type)
+                return expr.sem_type
+            
+            if expr.op == UnaryOp.DEREF:
+                if isinstance(inner_type, TypeOf):
+                    raise Exception(f"deref not allowed on type {inner_type}")
+                expr.sem_type = Deref(inner_type)
+                return expr.sem_type
+
             expr.sem_type = inner_type
             return inner_type
 
@@ -331,13 +472,15 @@ class SemanticAnalyzer:
             fn_type = self.visit_expr(expr.callee)
             if not isinstance(fn_type, FuncType):
                 raise Exception(f"cannot call {fn_type}")
-
+            
+            args = fn_type.args[1:] if fn_type.self_type != None else fn_type.args
+            
             # check arg count
-            if len(expr.args) != len(fn_type.args):
-                raise Exception(f"argument count mismatch - expected: {len(fn_type.args)}, got: {len(expr.args)}")
+            if len(expr.args) != len(args):
+                raise Exception(f"argument count mismatch for {fn_type.compact()} - expected: {len(args)}, got: {len(expr.args)}")
 
             # check args
-            for ((_, arg_expr), expected) in zip(expr.args, [a[1] for a in fn_type.args]):
+            for ((_, arg_expr), expected) in zip(expr.args, [a[1] for a in args]):
                 arg_t = self.visit_expr(arg_expr, expected)
                 if arg_t != expected:
                     raise Exception(f"argument type mismatch - expected: {expected}, got: {arg_t}")
@@ -348,12 +491,14 @@ class SemanticAnalyzer:
         # MEMBER (TODO: member unpacking)
         if isinstance(expr, MemberExpr):
             owner = self.visit_expr(expr.owner)
+
             if isinstance(owner, ObjectType):
                 if expr.name not in owner.symbols:
                     raise Exception(f"cannot get {expr.name} from {owner}")
                 expr.sem_type = owner.symbols[expr.name].inner
                 return expr.sem_type
             
+            # maybe also return functions but without has_self in future
             if isinstance(owner, TypeOf):
                 if isinstance(owner.inner, ObjectType):
                     if expr.name not in owner.inner.symbols:
@@ -362,25 +507,43 @@ class SemanticAnalyzer:
                         raise Exception(f"cannot get non static field {expr.name} from {owner}")
                     expr.sem_type = owner.inner.symbols[expr.name].inner
                     return expr.sem_type
-            
+                
+            if isinstance(owner, Ref):
+                if isinstance(owner.inner, ObjectType):
+                    if expr.name not in owner.inner.symbols:
+                        raise Exception(f"cannot get {expr.name} from {owner}")
+
+                    expr.sem_type = owner.inner.symbols[expr.name].inner
+                    if isinstance(expr.sem_type, FuncType):
+                        if expr.sem_type.self_type != None and not isinstance(expr.sem_type.self_type, Ref):
+                            raise Exception(f"cannot call non-ref self method {expr.sem_type}")
+
+                    return expr.sem_type
+
             raise Exception(f"cannot unpack {owner}")
         
         raise Exception(f"unknown expr: {type(expr)}")
 
-    def resolve_type(self, type: TypeRef | str | None) -> Type:
+    # TODO: update this.
+    def resolve_type(self, type: Expr | None) -> Type:
         if type is None:
             return None
-
-        if isinstance(type, str):
-            type_str = type
-        else:
-            type_str = type.to_str()
         
-        found_type = self.symtab.lookup(type_str)
-        if not isinstance(found_type, TypeOf):
-            raise Exception(f"typeref {type} does not point to a type symbol - {found_type}")
+        type = self.visit_expr(type)
 
-        return found_type.inner
+        if not isinstance(type, TypeOf):
+            raise Exception(f"not a type: instance of {type}")
+
+        # if isinstance(type, str):
+        #     type_str = type
+        # else:
+        #     type_str = type.to_str()
+        
+        # found_type = self.symtab.lookup(type_str)
+        # if not isinstance(found_type, TypeOf):
+        #     raise Exception(f"typeref {type} does not point to a type symbol - {found_type}")
+
+        return type.inner
 
     
     def block_returns_always(self, stmts):

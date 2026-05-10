@@ -1,6 +1,6 @@
 from .core import SourceSpan, Ident
 from .lexer import Lexer, TokenType, Token
-from .ast_nodes import BinaryOp, UnaryOp, Module, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, UnaryExpr, NumberExpr, StringExpr
+from .ast_nodes import BinaryOp, UnaryOp, Module, Field, Object, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, UnaryExpr, NumberExpr, StringExpr
 
 from pathlib import Path
 
@@ -48,7 +48,14 @@ class Parser:
     def __init__(self, curr_path: Path, search_paths: list[Path] = [], ident: Ident | None = None):
         self.curr_path = curr_path
         self.search_paths = search_paths
-        self.module = Module(ident if ident else Ident.of(str(curr_path)), curr_path, {}, {}, [])
+        self.module = Module(
+            ident=ident if ident else Ident.of(str(curr_path)),
+            curr_path=curr_path,
+            imports={},
+            functions={},
+            objects=[],
+            statements=[],
+        )
 
         # prob not needed, good to init anyways
         self.buffer = []
@@ -71,10 +78,13 @@ class Parser:
         # newline expects dont care about EOF
         if not token and type == TokenType.NEWLINE:
             return None
+        # dedent expects dont care about EOF
+        if not token and type == TokenType.DEDENT:
+            return None
         if not token or token.type != type:
             # TODO: proper error handling
             raise ValueError(
-                f"expected {msg if msg else type} but found {'none' if not token else token.type}"
+                f"expected {msg if msg else type} but found {'none' if not token else token.type} - {token}"
             )
         self.advance()
         return token
@@ -142,25 +152,80 @@ class Parser:
         self.expect(TokenType.NEWLINE)
 
         return path, symbol
+    
+    def parse_object(self):
+        assert(self.curr().type == TokenType.KEYWORD_OBJ)
+        self.advance()
 
-    # parse type
-    def parse_type(self) -> TypeRef:
-        parts = []
+        name = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.NEWLINE)
 
-        parts.append(self.expect(TokenType.IDENTIFIER).value)
+        ident = self.module.ident.sub(name)
 
-        start_span = self.last_span
+        if not self.match(TokenType.INDENT):
+            return Object(
+                ident=ident,
+                name=name,
+                fields=[],
+                functions=[],
+            )
+        
+        functions = []
+        fields = []
+        
+        # parse functions and fields
+        while self.has():
+            curr = self.curr()
 
-        while self.match(TokenType.DOT):
-            parts.append(self.expect(TokenType.IDENTIFIER).value)
+            # TODO: static and public modifiers here
 
-        return TypeRef(
-            parts=parts,
-            span=SourceSpan.combine(start_span, self.last_span)
+            # object functions
+            if curr.type == TokenType.KEYWORD_FUN:
+                functions.append(self.parse_function(ident))
+                continue
+
+            # fields
+            if curr.type == TokenType.IDENTIFIER:
+                field_name = curr.value
+                self.advance()
+
+                field_type = None
+                if self.match(TokenType.COLON):
+                    field_type = self.parse_type()
+                
+                init = None
+                if self.match(TokenType.EQUALS):
+                    init = self.parse_expr()
+                
+                self.expect(TokenType.NEWLINE)
+
+                fields.append(Field(
+                    name=field_name,
+                    type=field_type,
+                    init=init,
+                ))
+                continue
+
+            break
+
+        self.expect(TokenType.DEDENT)
+        
+        return Object(
+            ident=ident,
+            name=name,
+            fields=fields,
+            functions=functions,
         )
 
+
+    # parse type
+    def parse_type(self) -> Expr:
+        # Parse type expression (TODO: fix this, but im lazy)
+        # types do not support full expr set. For example addition makes no sense here
+        return self.parse_expr()
+
     # parse function
-    def parse_function(self) -> Function:
+    def parse_function(self, parent_ident: Ident) -> Function:
         assert(self.curr().type == TokenType.KEYWORD_FUN)
         self.advance()
 
@@ -202,7 +267,7 @@ class Parser:
                     break
 
         return Function(
-            ident=self.module.ident.sub(name),
+            ident=parent_ident.sub(name),
             name=name,
             args=args,
             is_extern=self.is_extern == True,
@@ -289,6 +354,14 @@ class Parser:
         if self.match(TokenType.MINUS):
             expr = self.parse_expr()
             return UnaryExpr(op=UnaryOp.NEG, inner=expr)
+        
+        if self.match(TokenType.AND):
+            expr = self.parse_expr()
+            return UnaryExpr(op=UnaryOp.REF, inner=expr)
+        
+        if self.match(TokenType.STAR):
+            expr = self.parse_expr()
+            return UnaryExpr(op=UnaryOp.DEREF, inner=expr)
         
         return self.parse_binary()
 
@@ -407,6 +480,10 @@ class Parser:
                 self.module.imports[symbol] = path
                 continue
 
+            if c.type == TokenType.KEYWORD_OBJ:
+                self.module.objects.append(self.parse_object())
+                continue
+
             if c.type == TokenType.KEYWORD_EXTERN:
                 self.advance()
                 self.is_extern = True
@@ -421,7 +498,8 @@ class Parser:
 
             # handle functions
             if c.type == TokenType.KEYWORD_FUN:
-                func = self.parse_function()
+                func = self.parse_function(self.module.ident)
+                # TODO: this should be semantic analysis!!
                 if func.name in self.module.functions:
                     raise Exception(f"redefinition of function {func.name}")
                 self.module.functions[func.name] = func

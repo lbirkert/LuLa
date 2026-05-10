@@ -2,14 +2,22 @@
 
 from .core import Ident
 from .ast_nodes import Module, UnaryExpr, UnaryOp, BinaryOp, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr
-from .semantic import SemanticAnalyzer, VoidType, IntType, FuncType
+from .semantic import SemanticAnalyzer, VoidType, IntType, FuncType, ObjectType, TypeOf, Ref
 from .lexer import Lexer
 from .parser import Parser
 from llvmlite import ir
 from pathlib import Path
+from dataclasses import dataclass
+
+@dataclass
+class FuncPtr:
+    self_ptr_val: ir.PointerType | ir.Value | None
+    func_ptr: ir.PointerType
 
 class IRGenerator:
     functions: dict[Ident, ir.Function]
+    object_symbols: dict[Ident, list[str]]
+    objects: dict[Ident, ir.IdentifiedStructType]
 
     def __init__(self):
         self.module = ir.Module(name="module")
@@ -17,7 +25,10 @@ class IRGenerator:
         self.function = None
 
         self.locals = {}     # name -> alloca ptr
+        self.globals = {}    # name -> global constant?
         self.functions = {}  # name -> ir.Function
+        self.objects = {}    # name -> object type
+        self.object_symbols = {} # name -> list[str] for GEP
 
     # -------------------------
     # TYPE MAPPING
@@ -30,6 +41,25 @@ class IRGenerator:
             return ir.VoidType()
         if isinstance(t, FuncType):
             return self.functions[t.ident].type
+        if isinstance(t, ObjectType):
+            if t.ident in self.objects:
+                return self.objects[t.ident]
+            
+            obj_symbols = []
+            obj_type = ir.global_context.get_identified_type(str(t.ident))
+            body = []
+            for (name, sym) in t.symbols.items():
+                if sym.is_comp_const or sym.is_static:
+                    continue # skip comp const and static fields
+                obj_symbols.append(name)
+                body.append(self.llvm_type(sym.inner))
+            obj_type.set_body(*body)
+            self.objects[t.ident] = obj_type
+            self.object_symbols[t.ident] = obj_symbols
+            return obj_type
+        if isinstance(t, Ref):
+            return self.llvm_type(t.inner).as_pointer()
+        # if isinstance(t, TypeOf)
         raise Exception(f"unknown type: {t}")
     
     # maybe do this through LuLa directly
@@ -99,7 +129,7 @@ class IRGenerator:
             self.emit_expr(stmt.expr)
 
         elif isinstance(stmt, ReturnStmt):
-            val = self.emit_expr(stmt.expr)
+            val = self.emit_expr_val(stmt.expr)
             self.builder.ret(val)
 
         elif isinstance(stmt, VarDeclStmt):
@@ -108,86 +138,186 @@ class IRGenerator:
             self.locals[stmt.name] = ptr
 
             if stmt.assign:
-                val = self.emit_expr(stmt.assign)
+                val = self.emit_expr_val(stmt.assign)
                 self.builder.store(val, ptr)
 
         elif isinstance(stmt, AssignStmt):
-            ptr = self.locals[stmt.target.name]
-            val = self.emit_expr(stmt.assign)
+            ptr = self.emit_expr_ptr(stmt.target)
+            val = self.emit_expr_val(stmt.assign)
             self.builder.store(val, ptr)
 
         else:
             raise Exception(f"unknown stmt: {type(stmt)}")
+    
+    def is_pointer(self, val):
+        return isinstance(val.type, ir.PointerType)
 
     # -------------------------
     # EXPRESSIONS
     # -------------------------
 
-    def emit_expr(self, expr: Expr):
+    def emit_expr_ptr(self, expr: Expr) -> ir.PointerType:
+        is_ptr, maybe_ptr = self.emit_expr(expr)
+        if not is_ptr:
+            raise Exception("got value instead of pointer!")
+        return maybe_ptr
+    
+    def emit_expr_val(self, expr: Expr) -> ir.Value:
+        is_ptr, maybe_ptr = self.emit_expr(expr)
+        if is_ptr:
+            return self.builder.load(maybe_ptr)
+        return maybe_ptr
+
+    # returns (True, PTR) or (False, VAL)
+    def emit_expr(self, expr: Expr) -> tuple[bool, ir.Type]:
         # Number
         if isinstance(expr, NumberExpr):
             t = self.llvm_type(expr.sem_type)
-            return ir.Constant(t, expr.value.value)
+            return False, ir.Constant(t, expr.value.value)
 
         # Identifier
         if isinstance(expr, IdentifierExpr):
-            ptr = self.locals[expr.name]
-            return self.builder.load(ptr)
+            if expr.name in self.locals:
+                return True, self.locals[expr.name]
+            
+            if expr.name in self.globals:
+                return True, self.globals[expr.name]
+
+            if isinstance(expr.sem_type, FuncType):
+                return True, FuncPtr(None, self.functions[expr.sem_type.ident])
 
         # Binary
         if isinstance(expr, BinaryExpr):
-            l = self.emit_expr(expr.left)
-            r = self.emit_expr(expr.right)
+            l = self.emit_expr_val(expr.left)
+            r = self.emit_expr_val(expr.right)
 
             if isinstance(expr.left.sem_type, IntType):
                 if expr.op == BinaryOp.ADD:
-                    return self.builder.add(l, r)
+                    return False, self.builder.add(l, r)
                 if expr.op == BinaryOp.SUB:
-                    return self.builder.sub(l, r)
+                    return False, self.builder.sub(l, r)
                 if expr.op == BinaryOp.MUL:
-                    return self.builder.mul(l, r)
+                    return False, self.builder.mul(l, r)
                 if expr.op == BinaryOp.DIV:
                     if expr.left.sem_type.is_unsigned:
-                        return self.builder.udiv(l, r)
+                        return False, self.builder.udiv(l, r)
                     else:
-                        return self.builder.sdiv(l, r)
+                        return False, self.builder.sdiv(l, r)
 
             raise Exception(f"unknown binary op {expr.op} for type {expr.left.sem_type}")
 
         # # Unary
         if isinstance(expr, UnaryExpr):
-            val = self.emit_expr(expr.inner)
-
             if expr.op == UnaryOp.NEG:
+                val = self.emit_expr_val(expr.inner)
                 zero = ir.Constant(val.type, 0)
-                return self.builder.sub(zero, val)
+                return False, self.builder.sub(zero, val)
+            
+            if expr.op == UnaryOp.REF:
+                ptr = self.emit_expr_ptr(expr.inner)
+                return False, ptr
+            
+            if expr.op == UnaryOp.DEREF:
+                val = self.emit_expr_val(expr.inner)
+                return False, val
 
             raise Exception(f"unknown unary op: {expr.op}")
 
         # Call
         if isinstance(expr, CallExpr):
-            ptr = self.emit_expr(expr.callee)
+            ptr = self.emit_expr_ptr(expr.callee)
 
-            args = [self.emit_expr(arg_expr) for _, arg_expr in expr.args]
+            if not isinstance(ptr, FuncPtr):
+                raise Exception("this should not happen!")
+            
+            args = []
+            if ptr.self_ptr_val != None:
+                args.append(ptr.self_ptr_val)
 
-            return self.builder.call(ptr, args)
+            args += [self.emit_expr_val(arg_expr) for _, arg_expr in expr.args]
+
+            return False, self.builder.call(ptr.func_ptr, args)
         
         if isinstance(expr, MemberExpr):
-            if isinstance(expr.sem_type, FuncType):
-                return self.functions[expr.sem_type.ident]
+            is_ref = False
+            sem_type = expr.owner.sem_type
+            if isinstance(sem_type, Ref):
+                is_ref = True
+                sem_type = sem_type.inner
 
-        raise Exception(f"unknown expr: {type(expr)}")
+            if isinstance(sem_type, ObjectType):
+                symb = sem_type.symbols[expr.name]
+                # check comptime const
+                if symb.is_comp_const:
+                    if isinstance(symb.inner, FuncType):
+                        self_ptr_val = None
+                        if symb.inner.self_type != None:
+                            # check self type (ref or val?)
+                            if isinstance(symb.inner.self_type, Ref):
+                                self_ptr_val = self.emit_expr_ptr(expr.owner)
+                            else:
+                                self_ptr_val = self.emit_expr_val(expr.owner)
+                        return True, FuncPtr(self_ptr_val, self.functions[symb.inner.ident])
+                    raise Exception(f"comp consts of type {symb.inner} not supported!")
+                
+                if symb.is_static:
+                    raise Exception(f"pure static symbols not implemented yet")
+                
+                # else: get from object type
+                if is_ref:
+                    owner_ptr = self.emit_expr_val(expr.owner)
+                else:
+                    owner_ptr = self.emit_expr_ptr(expr.owner)
+                field_ptr = self.builder.gep(
+                    owner_ptr,
+                    [
+                        ir.Constant(ir.IntType(32), 0),
+                        ir.Constant(ir.IntType(32), self.object_symbols[sem_type.ident].index(expr.name)),
+                    ]
+                )
+                return True, field_ptr
+
+            if isinstance(sem_type, FuncType):
+                return True, self.functions[sem_type.ident]
+            
+            raise Exception(f"member expression unimplemented for {sem_type}")
+
+        raise Exception(f"unknown expr: {expr}")
 
     def generate(self, modules: dict[Path, Module]):
-        for (_path, module) in modules.items():
+        for module in modules.values():
             # declare all functions
             for (_, func) in module.functions.items():
                 self.declare_function(func, func.sem_type)
 
-        for (_path, module) in modules.items():
+            for obj in module.objects:
+                for func in obj.functions:
+                    self.declare_function(func, func.sem_type)
+
+        for module in modules.values():
+            self.globals = {}
+
+            # define imports as globals
+            for (symb, path) in module.imports.items():
+                global_type = self.llvm_type(modules[path].sem_type)
+                global_var = ir.GlobalVariable(
+                    self.module,
+                    global_type,
+                    name=module.ident.subs(symb),
+                )
+                global_var.initializer = ir.Constant(
+                    global_type, [],
+                )
+                self.globals[symb] = global_var
+
             # emit bodies
             for (_, func) in module.functions.items():
                 if not func.is_extern:
+                    self.emit_function(func)
+            
+            # emit bodies
+            for obj in module.objects:
+                for func in obj.functions:
                     self.emit_function(func)
 
         return self.module
