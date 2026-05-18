@@ -1,12 +1,18 @@
 from .core import SourceSpan, Ident
 from .lexer import Lexer, TokenType, Token
-from .ast_nodes import BinaryOp, UnaryOp, Module, Field, Object, TypeRef, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, UnaryExpr, NumberExpr, StringExpr
+from .ast_nodes import BinaryOp, UnaryOp, Module, Field, Object, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, UnaryExpr, NumberExpr, StringExpr, BoolExpr, IfStmt, WhileStmt, CastExpr
 
 from pathlib import Path
 
 # the parser itself
 class Parser:
     binary_ops = {
+        TokenType.CMP_EQ: BinaryOp.CMP_EQ,
+        TokenType.CMP_NE: BinaryOp.CMP_NE,
+        TokenType.CMP_GT: BinaryOp.CMP_GT,
+        TokenType.CMP_LT: BinaryOp.CMP_LT,
+        TokenType.CMP_GE: BinaryOp.CMP_GE,
+        TokenType.CMP_LE: BinaryOp.CMP_LE,
         TokenType.PLUS: BinaryOp.ADD,
         TokenType.MINUS: BinaryOp.SUB,
         TokenType.STAR: BinaryOp.MUL,
@@ -14,21 +20,21 @@ class Parser:
     }
 
     precedence = {
-        # TokenType.OR: 1,
-        # TokenType.AND: 2,
-        # TokenType.EQ: 3,
+        # BinaryOp.POW:     (70, 69),
 
-        TokenType.PLUS: 4,
-        TokenType.MINUS: 4,
-        TokenType.STAR: 5,
-        TokenType.SLASH: 5,
-    }
+        BinaryOp.MUL:     (60, 61),
+        BinaryOp.DIV:     (60, 61),
 
-    associativity = {
-        TokenType.PLUS: "left",
-        TokenType.MINUS: "left",
-        TokenType.STAR: "left",
-        TokenType.SLASH: "left",
+        BinaryOp.ADD:     (50, 51),
+        BinaryOp.SUB:     (50, 51),
+
+        BinaryOp.CMP_GT:  (40, 41),
+        BinaryOp.CMP_LT:  (40, 41),
+        BinaryOp.CMP_GE:  (40, 41),
+        BinaryOp.CMP_LE:  (40, 41),
+
+        BinaryOp.CMP_EQ:  (30, 31),
+        BinaryOp.CMP_NE:  (30, 31),
     }
 
     buffer: list[Token]
@@ -220,9 +226,26 @@ class Parser:
 
     # parse type
     def parse_type(self) -> Expr:
-        # Parse type expression (TODO: fix this, but im lazy)
-        # types do not support full expr set. For example addition makes no sense here
-        return self.parse_expr()
+        if self.match(TokenType.AND):
+            expr = self.parse_type()
+            return UnaryExpr(op=UnaryOp.REF, inner=expr)
+        
+        ident = self.expect(TokenType.IDENTIFIER)
+        expr = IdentifierExpr(ident.value, ident.span)
+
+        while self.has():
+            curr = self.curr()
+
+            # member access
+            if curr.type == TokenType.DOT:
+                self.advance()
+                name = self.expect(TokenType.IDENTIFIER).value
+                expr = MemberExpr(expr, name)
+
+            else:
+                break
+
+        return expr
 
     # parse function
     def parse_function(self, parent_ident: Ident) -> Function:
@@ -279,10 +302,18 @@ class Parser:
         )
 
     def is_assignable(self, expr: Expr) -> bool:
+        if isinstance(expr, UnaryExpr) and expr.op == UnaryOp.DEREF:
+            return True
         return isinstance(expr, (IdentifierExpr, MemberExpr))
 
     def parse_stmt(self) -> Stmt:
         c = self.curr()
+
+        if c.type == TokenType.KEYWORD_IF:
+            return self.parse_if_stmt()
+        
+        if c.type == TokenType.KEYWORD_WHILE:
+            return self.parse_while_stmt()
         
         if c.type == TokenType.KEYWORD_RET:
             return self.parse_return_stmt()
@@ -297,9 +328,7 @@ class Parser:
         if self.match(TokenType.EQUALS):
             if not self.is_assignable(expr):
                 # TODO: error handling
-                raise ValueError(
-                    f"cannot assign to LHS {expr}"
-                )
+                raise ValueError(f"cannot assign to LHS {expr}")
 
             assign = self.parse_expr()
             
@@ -322,6 +351,57 @@ class Parser:
         
         return ReturnStmt(
             expr=expr
+        )
+    
+    def parse_while_stmt(self) -> WhileStmt:
+        assert(self.curr().type == TokenType.KEYWORD_WHILE)
+        self.advance()
+        
+        cond = self.parse_expr()
+        
+        self.expect(TokenType.NEWLINE)
+        body = []
+        if self.match(TokenType.INDENT):
+            while self.has():
+                body.append(self.parse_stmt())
+
+                if self.match(TokenType.DEDENT):
+                    break
+        
+        return WhileStmt(
+            cond=cond,
+            body=body,
+        )
+
+    def parse_if_stmt(self) -> IfStmt:
+        assert(self.curr().type == TokenType.KEYWORD_IF)
+        self.advance()
+
+        cond = self.parse_expr()
+
+        self.expect(TokenType.NEWLINE)
+        body_if = []
+        if self.match(TokenType.INDENT):
+            while self.has():
+                body_if.append(self.parse_stmt())
+
+                if self.match(TokenType.DEDENT):
+                    break
+
+        body_else = []
+        if self.match(TokenType.KEYWORD_ELSE):
+            self.expect(TokenType.NEWLINE)
+            if self.match(TokenType.INDENT):
+                while self.has():
+                    body_else.append(self.parse_stmt())
+
+                    if self.match(TokenType.DEDENT):
+                        break
+        
+        return IfStmt(
+            cond=cond,
+            body_if=body_if,
+            body_else=body_else,
         )
 
     def parse_var_decl_stmt(self) -> VarDeclStmt:
@@ -354,6 +434,10 @@ class Parser:
         if self.match(TokenType.MINUS):
             expr = self.parse_expr()
             return UnaryExpr(op=UnaryOp.NEG, inner=expr)
+    
+        if self.match(TokenType.EXCLEM):
+            expr = self.parse_expr()
+            return UnaryExpr(op=UnaryOp.NOT, inner=expr)
         
         if self.match(TokenType.AND):
             expr = self.parse_expr()
@@ -366,7 +450,7 @@ class Parser:
         return self.parse_binary()
 
     # parse binary expressions
-    def parse_binary(self, min_prec=0):
+    def parse_binary(self, min_bp=0):
         left = self.parse_postfix()
 
         while self.has():
@@ -375,28 +459,26 @@ class Parser:
             if op_token.type not in self.binary_ops:
                 break
 
-            # precedence handling
-            prec = self.precedence[op_token.type]
-            if prec < min_prec:
-                break
+            op = self.binary_ops[op_token.type]
+            lbp, rbp = self.precedence[op]
 
-            assoc = self.associativity.get(op_token.type, "left")
+            # Pratt break condition
+            if lbp < min_bp:
+                break
 
             self.advance()
 
-            next_min_prec = prec + 1 if assoc == "left" else prec
-
-            right = self.parse_binary(next_min_prec)
+            # recursive descent using right binding power
+            right = self.parse_binary(rbp)
 
             left = BinaryExpr(
                 left=left,
-                op=self.binary_ops[op_token.type],
+                op=op,
                 right=right
             )
 
         return left
-
-    # handles function calling
+    
     def finish_call(self, callee: Expr) -> CallExpr:
         assert(self.curr().type == TokenType.LPAREN)
         self.advance()
@@ -425,8 +507,13 @@ class Parser:
         while self.has():
             curr = self.curr()
 
+            if curr.type == TokenType.KEYWORD_AS:
+                self.advance()
+                type = self.parse_type()
+                expr = CastExpr(expr, type)
+
             # function call
-            if curr.type == TokenType.LPAREN:
+            elif curr.type == TokenType.LPAREN:
                 expr = self.finish_call(expr)
 
             # member access
@@ -446,7 +533,10 @@ class Parser:
         self.advance()
 
         if tok.type == TokenType.NUMBER:
-            return NumberExpr(tok.value, tok.span)
+            return NumberExpr(tok.value, IdentifierExpr(tok.value.type, tok.span), tok.span)
+        
+        if tok.type == TokenType.BOOL:
+            return BoolExpr(tok.value, tok.span)
 
         if tok.type == TokenType.STRING:
             return StringExpr(tok.value, tok.span)

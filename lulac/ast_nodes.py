@@ -1,9 +1,22 @@
-from .core import SourceSpan, NumberLiteral, Ident
+from .core import SourceSpan, Ident
 
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 from pathlib import Path
+from enum import Enum
+
+@dataclass
+class NumberLiteral:
+    type: str | None
+
+@dataclass
+class IntLiteral(NumberLiteral):
+    value: int
+
+@dataclass
+class FloatLiteral(NumberLiteral):
+    value: float
 
 def pad(indent: int) -> str:
     return "  " * indent
@@ -30,10 +43,19 @@ class Expr(AstNode):
 @dataclass
 class NumberExpr(Expr):
     value: NumberLiteral
+    type: Expr | None
     span: SourceSpan
 
     def format(self, indent: int = 0) -> str:
         return f"{pad(indent)}NumberExpr({self.value.value}{fmt_sem(self)})"
+
+@dataclass
+class BoolExpr(Expr):
+    value: bool
+    span: SourceSpan
+
+    def format(self, indent: int = 0) -> str:
+        return f"{pad(indent)}BoolExpr({self.value}{fmt_sem(self)})"
 
 
 @dataclass
@@ -46,6 +68,7 @@ class StringExpr(Expr):
 
 class UnaryOp(Enum):
     NEG = "neg"
+    NOT = "not"
     REF = "ref"
     DEREF = "deref"
 
@@ -53,9 +76,20 @@ class UnaryOp(Enum):
         self.op_name = op_name
 
 @dataclass
-class UnaryExpr(Expr):
-    op: UnaryOp
+class CastExpr(Expr):
     inner: Expr
+    type: Expr
+
+    def format(self, indent: int = 0) -> str:
+        return (
+            f"{pad(indent)}CastExpr({self.type}{fmt_sem(self)})\n"
+            f"{self.inner.format(indent + 1)}"
+        )
+
+@dataclass
+class UnaryExpr(Expr):
+    inner: Expr
+    op: UnaryOp
     
     def format(self, indent: int = 0) -> str:
         return (
@@ -64,13 +98,29 @@ class UnaryExpr(Expr):
         )
 
 class BinaryOp(Enum):
-    ADD = "add"
-    SUB = "sub"
-    MUL = "mul"
-    DIV = "div"
+    CMP_EQ = "=="
+    CMP_NE = "!="
+    CMP_LT = "<"
+    CMP_GT = ">"
+    CMP_LE = "<="
+    CMP_GE = ">="
+    ADD = "+"
+    SUB = "-"
+    MUL = "*"
+    DIV = "/"
 
     def __init__(self, op_name: str):
         self.op_name = op_name
+    
+    def is_cmp(self):
+        return self in [
+            self.CMP_EQ,
+            self.CMP_NE,
+            self.CMP_LT,
+            self.CMP_GT,
+            self.CMP_LE,
+            self.CMP_GE,
+        ]
 
 @dataclass
 class BinaryExpr(Expr):
@@ -136,7 +186,7 @@ class Stmt(AstNode):
 @dataclass
 class VarDeclStmt(Stmt):
     name: str
-    type: TypeRef | None
+    type: Expr | None
     assign: Expr | None
 
     def format(self, indent: int = 0) -> str:
@@ -178,23 +228,26 @@ class ReturnStmt(Stmt):
     def format(self, indent: int = 0) -> str:
         return f"{pad(indent)}ReturnStmt{fmt_sem(self)}\n{self.expr.format(indent + 1)}"
 
+@dataclass
+class WhileStmt(Stmt):
+    cond: Expr
+    body: list[Stmt]
+    
+    def format(self, indent: int = 0) -> str:
+        return f"{pad(indent)}WhileStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}Body:\n{"".join([stmt.format(indent + 2) for stmt in self.body])}"
 
+@dataclass
+class IfStmt(Stmt):
+    cond: Expr
+    body_if: list[Stmt]
+    body_else: list[Stmt]
+    
+    def format(self, indent: int = 0) -> str:
+        return f"{pad(indent)}IfStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}BodyIf:\n{"".join([stmt.format(indent + 2) for stmt in self.body_if])}\n{pad(indent + 1)}BodyElse:\n{"".join([stmt.format(indent + 2) for stmt in self.body_else])}"
 
 # =========================
 # MISC
 # =========================
-
-@dataclass
-class TypeRef(AstNode):
-    parts: list[str]
-    span: SourceSpan
-
-    def format(self, indent: int = 0) -> str:
-        return f"{pad(indent)}TypeRef({'.'.join(self.parts)}{fmt_sem(self)})"
-
-
-    def to_str(self) -> str:
-        return ".".join(self.parts)
 
 @dataclass
 class Function(AstNode):
@@ -203,8 +256,8 @@ class Function(AstNode):
     asm_name: str | None
     is_extern: bool
     is_inline: bool
-    args: list[tuple[str | None, TypeRef]]
-    ret_type: TypeRef | None
+    args: list[tuple[str | None, Expr]]
+    ret_type: Expr | None
     body: list[Stmt]
     span: SourceSpan
 
@@ -230,7 +283,7 @@ class Function(AstNode):
 @dataclass
 class Field(AstNode):
     name: str
-    type: TypeRef
+    type: Expr
     init: Expr
 
     def format(self, indent: int = 0) -> str:

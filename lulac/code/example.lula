@@ -1,24 +1,7 @@
 import "std.lula" as std
 
-obj Counter
-    counter: i32
-
-    fun init(self: &Self)
-        self.counter = 0
-
-    fun increase(self: &Self)
-        self.counter = self.counter + 1
-
-    fun print(self: &Self)
-        std.print_number(self.counter)
-
 __asm__("main") fun main()
-    var myCounter: Counter
-    myCounter.init()
-    myCounter.increase()
-    myCounter.increase()
-    myCounter.increase()
-    myCounter.print() # should print 3
-    myCounter.increase()
-    myCounter.increase()
-    myCounter.print() # should print 5
+    var c: i32 = -5
+    while c < 10
+        std.print_number(c as u8)
+        c = c + 1 # TODO

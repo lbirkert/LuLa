@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <stdint.h>
 
@@ -27,12 +28,20 @@ uint64_t mod_eu_i64(int64_t a, int64_t b) {
     return (uint64_t)r;
 }
 
+int8_t* internal_malloc(uint64_t size) {
+    return malloc(size);
+}
+
+void internal_free(int8_t* ptr) {
+    return free(ptr);
+}
+
 // not needed yet, for future use
 void print_internal(char* buf, uint64_t len) {
     write(1, buf, len);
     write(1, "\n", 1);
 }
 
-void print_number(int8_t num) {
+void print_number(uint8_t num) {
     printf("print_number: %d\n", num);
 }

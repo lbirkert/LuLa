@@ -1,9 +1,9 @@
 # Semantic Analysis
 
-from .core import Ident, IntLiteral, FloatLiteral
+from .core import Ident
 from .lexer import Lexer
 from .parser import Parser
-from .ast_nodes import Module, Object, UnaryOp, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr, UnaryExpr
+from .ast_nodes import Module, Object, UnaryOp, Function, IdentifierExpr, MemberExpr, CallExpr, Expr, Stmt, ReturnStmt, ExprStmt, AssignStmt, VarDeclStmt, BinaryExpr, NumberExpr, StringExpr, UnaryExpr, IntLiteral, FloatLiteral, BoolExpr, IfStmt, WhileStmt, CastExpr
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,6 +151,10 @@ class IntType(Type):
     def __str__(self):
         return self.name
 
+class BoolType(Type):
+    def __str__(self):
+        return "bool"
+
 I8  = IntType.define("i8", 8)
 I16 = IntType.define("i16", 16)
 I32 = IntType.define("i32", 32)
@@ -161,6 +165,11 @@ U16 = IntType.define("u16", 16, True)
 U32 = IntType.define("u32", 32, True)
 U64 = IntType.define("u64", 64, True)
 VOID = VoidType()
+BOOL = BoolType()
+STR = ObjectType(Ident.of("std::str"), {
+    "len": Symbol(U64, True, False, False),
+    "buf": Symbol(Ref(I8), True, False, False),
+})
 
 class SymbolTable:
     symbols: list[dict[str, Type]]
@@ -168,7 +177,9 @@ class SymbolTable:
     def __init__(self):
         # init with builtin types
         self.symbols = [{
+            "str": TypeOf(STR),
             "void": TypeOf(VOID),
+            "bool": TypeOf(BOOL),
             "i8":  TypeOf(I8),
             "i16": TypeOf(I16),
             "i32": TypeOf(I32),
@@ -192,7 +203,7 @@ class SymbolTable:
         for scope in reversed(self.symbols):
             if name in scope:
                 return scope[name]
-        raise Exception(f"undefined type: {name}")
+        raise Exception(f"undefined symbol: {name}")
 
 
 class SemanticAnalyzer:
@@ -347,7 +358,7 @@ class SemanticAnalyzer:
 
         self.symtab.pop()
 
-    def visit_stmt(self, stmt, ret_type: Type | None):
+    def visit_stmt(self, stmt: Stmt, ret_type: Type | None):
         if isinstance(stmt, ExprStmt):
             stmt.sem_type = self.visit_expr(stmt.expr)
 
@@ -391,10 +402,38 @@ class SemanticAnalyzer:
 
             if var_t != value_t:
                 raise Exception(f"type mismatch in assignment var_t {var_t} value_t {value_t}")
+        
+        elif isinstance(stmt, IfStmt):
+            cond_t = self.visit_expr(stmt.cond)
+            if not isinstance(cond_t, BoolType):
+                raise Exception(f"non bool condition {cond_t} not supported yet!")
+
+            self.symtab.push()
+            for s in stmt.body_if:
+                self.visit_stmt(s, ret_type)
+            self.symtab.pop()
+            
+            self.symtab.push()
+            for s in stmt.body_else:
+                self.visit_stmt(s, ret_type)
+            self.symtab.pop()
+
+        elif isinstance(stmt, WhileStmt):
+            cond_t = self.visit_expr(stmt.cond)
+            if not isinstance(cond_t, BoolType):
+                raise Exception(f"non bool condition {cond_t} not supported yet!")
+
+            self.symtab.push()
+            for s in stmt.body:
+                self.visit_stmt(s, ret_type)
+            self.symtab.pop()
+
+        else:
+            raise Exception(f"statement {stmt} not implemented!")
 
     def visit_number(self, expr: NumberExpr, expected_type: Type | None = None):
         if expr.value.type:
-            type = self.resolve_type(expr.value.type)
+            type = self.resolve_type(expr.type)
             if isinstance(type, IntType):
                 type.check(expr)
         else:
@@ -417,10 +456,14 @@ class SemanticAnalyzer:
         # INT
         if isinstance(expr, NumberExpr):
             return self.visit_number(expr, expected_type)
+        
+        if isinstance(expr, BoolExpr):
+            expr.sem_type = BOOL
+            return expr.sem_type
 
         # STRING (optional)
         if isinstance(expr, StringExpr):
-            expr.sem_type = "string"
+            expr.sem_type = STR
             return expr.sem_type
 
         # VARIABLE
@@ -440,10 +483,17 @@ class SemanticAnalyzer:
                 return expr.sem_type
             
             if expr.op == UnaryOp.DEREF:
-                if isinstance(inner_type, TypeOf):
+                if not isinstance(inner_type, Ref):
                     raise Exception(f"deref not allowed on type {inner_type}")
-                expr.sem_type = Deref(inner_type)
+                expr.sem_type = inner_type.inner
                 return expr.sem_type
+            
+            if expr.op == UnaryOp.NOT:
+                assert(isinstance(inner_type, BoolType))
+                expr.sem_type = inner_type
+                return expr.sem_type
+            
+            assert(isinstance(inner_type, IntType))
 
             expr.sem_type = inner_type
             return inner_type
@@ -456,16 +506,31 @@ class SemanticAnalyzer:
             # one side is not known, retry with new expected_type
             if l == None or r == None:
                 expected_type = l if l != None else r if r != None else expected_type
+                if isinstance(expected_type, Ref):
+                    expected_type = U64
                 if expected_type == None and not test_type:
-                    raise Exception(f"cannot infer type for expression:\n {expr.format()}")
+                    raise Exception(f"cannot infer type for binary expression:\n {expr.format()}")
                 l = self.visit_expr(expr.left, expected_type)
                 r = self.visit_expr(expr.right, expected_type)
 
-            if l != r:
+            l_ptr = isinstance(l, Ref)
+            r_ptr = isinstance(r, Ref)
+
+            if l_ptr or r_ptr:
+                int_type = r if l_ptr else l
+                if int_type not in [I64, U64, I32, U32]:
+                    raise Exception(f"type mismatch in binary expression lhs {l} rhs {r}")
+            elif l != r:
                 raise Exception(f"type mismatch in binary expression lhs {l} rhs {r}")
 
-            expr.sem_type = l
-            return l
+            if expr.op.is_cmp():
+                expr.sem_type = BOOL
+            elif l_ptr or r_ptr:
+                expr.sem_type = l if l_ptr else r
+            else:
+                expr.sem_type = l
+
+            return expr.sem_type
 
         # CALL
         if isinstance(expr, CallExpr):
@@ -488,7 +553,6 @@ class SemanticAnalyzer:
             expr.sem_type = fn_type.ret
             return expr.sem_type
 
-        # MEMBER (TODO: member unpacking)
         if isinstance(expr, MemberExpr):
             owner = self.visit_expr(expr.owner)
 
@@ -522,7 +586,16 @@ class SemanticAnalyzer:
 
             raise Exception(f"cannot unpack {owner}")
         
-        raise Exception(f"unknown expr: {type(expr)}")
+        if isinstance(expr, CastExpr):
+            expr.sem_type = self.resolve_type(expr.type)
+            inner_type = self.visit_expr(expr.inner, expr.sem_type)
+            # TODO: proper check whether castable
+            if not (isinstance(expr.sem_type, IntType) and isinstance(inner_type, IntType)):
+                raise Exception(f"cannot cast {inner_type} to {expr.sem_type}")
+            return expr.sem_type
+
+        
+        raise Exception(f"unknown expr: {expr}")
 
     # TODO: update this.
     def resolve_type(self, type: Expr | None) -> Type:

@@ -1,17 +1,4 @@
 from dataclasses import dataclass
-from enum import Enum
-
-@dataclass
-class NumberLiteral:
-    type: str | None
-
-@dataclass
-class IntLiteral(NumberLiteral):
-    value: int
-
-@dataclass
-class FloatLiteral(NumberLiteral):
-    value: float
 
 @dataclass
 class Ident:

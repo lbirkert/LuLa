@@ -1,4 +1,5 @@
-from .core import SourceSpan, NumberLiteral, IntLiteral, FloatLiteral
+from .core import SourceSpan
+from .ast_nodes import NumberLiteral, IntLiteral, FloatLiteral
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -13,22 +14,27 @@ from enum import Enum, auto
 
 class TokenType(Enum):
     # keywords
+    KEYWORD_AS = auto()
+    KEYWORD_IF = auto()
+    KEYWORD_ELSE = auto()
+    KEYWORD_WHILE = auto()
     KEYWORD_VAR = auto()
     KEYWORD_FUN = auto()
     KEYWORD_OBJ = auto()
     KEYWORD_RET = auto()
-    KEYWORD_AS = auto()
+    KEYWORD_ASM = auto()
     KEYWORD_IMPORT = auto()
     KEYWORD_EXTERN = auto()
-    KEYWORD_ASM = auto()
     # values
     NUMBER = auto()
+    BOOL = auto()
     STRING = auto()
     # single char tokens
     EQUALS = auto()
     COMMA = auto()
     LPAREN = auto()
     RPAREN = auto()
+    # unary/binary ops
     PLUS = auto()
     MINUS = auto()
     STAR = auto()
@@ -36,6 +42,14 @@ class TokenType(Enum):
     COLON = auto()
     AND = auto()
     DOT = auto()
+    EXCLEM = auto()
+    # comparisons
+    CMP_EQ = auto() # ==
+    CMP_NE = auto() # !=
+    CMP_LT = auto() # <
+    CMP_GT = auto() # >
+    CMP_LE = auto() # <=
+    CMP_GE = auto() # >=
     # misc
     INDENT = auto()
     DEDENT = auto()
@@ -57,6 +71,8 @@ class Lexer:
 
     single_char_tokens = {
         "=": TokenType.EQUALS,
+        ">": TokenType.CMP_GT,
+        "<": TokenType.CMP_LT,
         "(": TokenType.LPAREN,
         ")": TokenType.RPAREN,
         ":": TokenType.COLON,
@@ -66,10 +82,23 @@ class Lexer:
         "*": TokenType.STAR,
         "/": TokenType.SLASH,
         "&": TokenType.AND,
+        "!": TokenType.EXCLEM,
         ".": TokenType.DOT,
     }
 
+    multi_char_tokens = [
+        ("**", TokenType.POWER),
+        ("->", TokenType.RETURN_TYPE),
+        ("==", TokenType.CMP_EQ),
+        ("!=", TokenType.CMP_NE),
+        (">=", TokenType.CMP_GE),
+        ("<=", TokenType.CMP_LE),
+    ]
+
     keywords = {
+        "if": TokenType.KEYWORD_IF,
+        "else": TokenType.KEYWORD_ELSE,
+        "while": TokenType.KEYWORD_WHILE,
         "var": TokenType.KEYWORD_VAR,
         "fun": TokenType.KEYWORD_FUN,
         "ret": TokenType.KEYWORD_RET,
@@ -473,37 +502,41 @@ class Lexer:
                 token_span = self.end_span()
 
                 token_type = TokenType.IDENTIFIER
+                token_value = word
                 if word in self.keywords:
                     token_type = self.keywords[word]
+                
+                if word == "false":
+                    token_type = TokenType.BOOL
+                    token_value = False
+                
+                if word == "true":
+                    token_type = TokenType.BOOL
+                    token_value = True
 
                 self.tokens.append(Token(
                     type=token_type,
                     span=token_span,
-                    value=word,
+                    value=token_value,
                 ))
                 continue
 
-            # handle return token
-            if self.peek(2) == "->":
-                self.start_span()
-                self.advance(2)
-                span = self.end_span()
-                self.tokens.append(Token(
-                    type=TokenType.RETURN_TYPE,
-                    span=span,
-                    value=None,
-                ))
-                continue
-
-            if self.peek(2) == "**":
-                self.start_span()
-                self.advance(2)
-                span = self.end_span()
-                self.tokens.append(Token(
-                    type=TokenType.POWER,
-                    span=span,
-                    value=None,
-                ))
+            # handle multi char tokens
+            should_continue = False
+            for (seq, token_type) in self.multi_char_tokens:
+                if self.peek(len(seq)) == seq:
+                    self.start_span()
+                    self.advance(len(seq))
+                    span = self.end_span()
+                    self.tokens.append(Token(
+                        type=token_type,
+                        span=span,
+                        value=None,
+                    ))
+                    should_continue = True
+                    break
+            
+            if should_continue:
                 continue
 
             # handle single char tokens

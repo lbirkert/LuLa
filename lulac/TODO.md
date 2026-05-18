@@ -1,28 +1,25 @@
-- Implement control flow
-    - Implement if/else/elif
-    - Implement while loop
 - Implement assign add/sub/... operations
     - assign add
     - assign sub
     - assign mul
     - assign div
     - assign 
-- Implement heap memory
+- Implement mutability concept
 - Implement strings
-    - Implement string constants
     - Implement string operations
         - Adding strings together
 - Implement expressions nice to have
     - Power, Remainder, ...
     - Bitwise operations
 - Implement object nice to have
-    - Implement operators
+    - Implement operators (would be good!)
         - Fix current implementation
         - Think about making ints defined using ObjectType
     - Code Generation
         - Initializing (constructors?) -> later
 - Implement control flow nice to have
     - Implement for loop
+    - Implement elif
     - Implement switch/match statements
 - Implement object inheritance
 - Implement function nice to have
