@@ -4,4 +4,4 @@ __asm__("main") fun main()
     var c: i32 = -5
     while c < 10
         std.print_number(c as u8)
-        c = c + 1 # TODO
+        c += 1

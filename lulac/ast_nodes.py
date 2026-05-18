@@ -234,7 +234,7 @@ class WhileStmt(Stmt):
     body: list[Stmt]
     
     def format(self, indent: int = 0) -> str:
-        return f"{pad(indent)}WhileStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}Body:\n{"".join([stmt.format(indent + 2) for stmt in self.body])}"
+        return f"{pad(indent)}WhileStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}Body:\n{"\n".join([stmt.format(indent + 2) for stmt in self.body])}"
 
 @dataclass
 class IfStmt(Stmt):
@@ -243,7 +243,7 @@ class IfStmt(Stmt):
     body_else: list[Stmt]
     
     def format(self, indent: int = 0) -> str:
-        return f"{pad(indent)}IfStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}BodyIf:\n{"".join([stmt.format(indent + 2) for stmt in self.body_if])}\n{pad(indent + 1)}BodyElse:\n{"".join([stmt.format(indent + 2) for stmt in self.body_else])}"
+        return f"{pad(indent)}IfStmt{fmt_sem(self)}\n{pad(indent + 1)}Cond:\n{self.cond.format(indent + 2)}\n{pad(indent + 1)}BodyIf:\n{"\n".join([stmt.format(indent + 2) for stmt in self.body_if])}\n{pad(indent + 1)}BodyElse:\n{"\n".join([stmt.format(indent + 2) for stmt in self.body_else])}"
 
 # =========================
 # MISC

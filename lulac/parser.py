@@ -19,6 +19,13 @@ class Parser:
         TokenType.SLASH: BinaryOp.DIV,
     }
 
+    compound_ops = {
+        TokenType.COMPOUND_ADD: BinaryOp.ADD,
+        TokenType.COMPOUND_SUB: BinaryOp.SUB,
+        TokenType.COMPOUND_MUL: BinaryOp.MUL,
+        TokenType.COMPOUND_DIV: BinaryOp.DIV,
+    }
+
     precedence = {
         # BinaryOp.POW:     (70, 69),
 
@@ -323,9 +330,11 @@ class Parser:
         
         # else its an expression with maybe assignment
         expr = self.parse_expr()
+        curr = self.curr()
 
         # check assignment
-        if self.match(TokenType.EQUALS):
+        if curr and curr.type == TokenType.EQUALS:
+            self.advance()
             if not self.is_assignable(expr):
                 # TODO: error handling
                 raise ValueError(f"cannot assign to LHS {expr}")
@@ -335,6 +344,18 @@ class Parser:
             self.expect(TokenType.NEWLINE, "newline after statement")
 
             return AssignStmt(target=expr, assign=assign)
+        
+        # check compound op
+        if curr and curr.type in self.compound_ops:
+            self.advance()
+            if not self.is_assignable(expr):
+                # TODO: error handling
+                raise ValueError(f"cannot assign to LHS {expr}")
+
+            assign = self.parse_expr()
+            self.expect(TokenType.NEWLINE, "newline after statement")
+            
+            return AssignStmt(target=expr, assign=BinaryExpr(expr, self.compound_ops[curr.type], assign))
     
         # otherwise its just an expression statement
         self.expect(TokenType.NEWLINE, "newline after statement")

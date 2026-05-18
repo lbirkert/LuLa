@@ -50,6 +50,11 @@ class TokenType(Enum):
     CMP_GT = auto() # >
     CMP_LE = auto() # <=
     CMP_GE = auto() # >=
+    # compund operators
+    COMPOUND_ADD = auto() # +=
+    COMPOUND_SUB = auto() # -=
+    COMPOUND_MUL = auto() # *=
+    COMPOUND_DIV = auto() # /=
     # misc
     INDENT = auto()
     DEDENT = auto()
@@ -93,6 +98,11 @@ class Lexer:
         ("!=", TokenType.CMP_NE),
         (">=", TokenType.CMP_GE),
         ("<=", TokenType.CMP_LE),
+
+        ("+=", TokenType.COMPOUND_ADD),
+        ("-=", TokenType.COMPOUND_SUB),
+        ("*=", TokenType.COMPOUND_MUL),
+        ("/=", TokenType.COMPOUND_DIV),
     ]
 
     keywords = {
